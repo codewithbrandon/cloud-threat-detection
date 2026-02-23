@@ -20,10 +20,10 @@ Usage:
 """
 
 import argparse
+import json
+import logging
 import sys
 import time
-import logging
-import json
 from datetime import datetime, timezone
 
 import requests
@@ -165,7 +165,7 @@ def main():
     print(f"  Target:     {args.target}")
     print(f"  Mode:       {args.mode}")
     print(f"  Max size:   {args.size}MB (limit: 512MB)")
-    print(f"  Thresholds: HighMemory=384MB | Critical=460MB | OOMKill=512MB")
+    print("  Thresholds: HighMemory=384MB | Critical=460MB | OOMKill=512MB")
     print()
     print("  DETECTION EXPECTED:")
     print("  [x] Prometheus: HighMemoryUsage (>384Mi for 2min)")

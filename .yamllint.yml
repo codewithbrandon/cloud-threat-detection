@@ -43,6 +43,5 @@ rules:
     max-start: 0
     max-end: 0
 
-  # Document start — optional (many K8s files omit '---').
-  document-start:
-    present: optional
+  # Document start — disabled; K8s files use '---' inconsistently by design.
+  document-start: disable

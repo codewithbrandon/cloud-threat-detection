@@ -25,10 +25,10 @@ Usage:
 """
 
 import argparse
+import json
+import logging
 import sys
 import time
-import logging
-import json
 from datetime import datetime, timezone
 
 import requests

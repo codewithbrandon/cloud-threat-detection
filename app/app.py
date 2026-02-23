@@ -10,18 +10,21 @@ This app serves as both the target workload AND the traffic/attack simulator,
 enabling end-to-end detection testing without external infrastructure.
 """
 
-import os
-import time
-import random
 import logging
+import os
+import random
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from prometheus_client import (
-    Counter, Histogram, Gauge, Summary,
-    generate_latest, CONTENT_TYPE_LATEST
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
 )
 
 # ---------------------------------------------------------------------------
@@ -494,7 +497,7 @@ def suspicious_file_write():
     - Log "SUSPICIOUS_FILE_WRITE" → Loki alert
     - Only writes to /tmp in practice (safe demo)
     """
-    data = request.get_json(silent=True) or {}
+    # No body parameters used — endpoint is trigger-only
     # Always safe — only /tmp writes allowed
     safe_path = '/tmp/simulated_threat_artifact.txt'
 

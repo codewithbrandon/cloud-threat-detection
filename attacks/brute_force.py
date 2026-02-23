@@ -22,15 +22,14 @@ Usage:
 """
 
 import argparse
+import json
+import logging
 import random
 import sys
 import time
-import logging
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -84,7 +83,7 @@ class AttackResult:
     rate_limited: int = 0
     errors: int = 0
     start_time: float = field(default_factory=time.time)
-    results: List[dict] = field(default_factory=list)
+    results: list[dict] = field(default_factory=list)
 
     def summary(self) -> dict:
         elapsed = time.time() - self.start_time
@@ -99,7 +98,7 @@ class AttackResult:
         }
 
 
-def create_session(source_ip: Optional[str] = None) -> requests.Session:
+def create_session(source_ip: str | None = None) -> requests.Session:
     """Create HTTP session with retry configuration."""
     session = requests.Session()
     retry_strategy = Retry(
@@ -121,8 +120,8 @@ def attempt_login(
     target: str,
     username: str,
     password: str,
-    source_ip: Optional[str] = None,
-    result_tracker: Optional[AttackResult] = None
+    source_ip: str | None = None,
+    result_tracker: AttackResult | None = None,
 ) -> dict:
     """
     Sends a single login request and records the result.
@@ -388,10 +387,10 @@ def main():
         print(f"  {key:30s}: {value}")
     print()
     print("  VERIFY DETECTION:")
-    print(f"  Prometheus:  http://localhost:9090/alerts")
-    print(f"  Alertmanager: http://localhost:9093")
-    print(f"  Loki (Grafana): http://localhost:3000")
-    print(f"  Query: {{app=\"threat-detection-app\"}} |= \"AUTHENTICATION_FAILURE\"")
+    print("  Prometheus:  http://localhost:9090/alerts")
+    print("  Alertmanager: http://localhost:9093")
+    print("  Loki (Grafana): http://localhost:3000")
+    print('  Query: {app="threat-detection-app"} |= "AUTHENTICATION_FAILURE"')
     print("=" * 70)
 
     if args.output:

@@ -22,10 +22,10 @@ Usage:
 """
 
 import argparse
+import json
+import logging
 import sys
 import time
-import logging
-import json
 from datetime import datetime, timezone
 
 import requests
@@ -235,7 +235,7 @@ def main():
     print()
     print("  VERIFY DETECTION:")
     print(f"  Prometheus: {args.prometheus}/alerts")
-    print(f"  Grafana Loki: {{app=\"threat-detection-app\"}} |= \"CPU_SPIKE\"")
+    print('  Grafana Loki: {app="threat-detection-app"} |= "CPU_SPIKE"')
     print("=" * 70)
 
     if args.output:
