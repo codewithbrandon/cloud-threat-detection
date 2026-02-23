@@ -363,8 +363,7 @@ def memory_pressure():
         memory_usage_bytes.set(total_allocated)
 
     logger.warning(
-        f"MEMORY_ALLOCATED size_mb={size_mb} "
-        f"total_allocated_bytes={total_allocated}"
+        f"MEMORY_ALLOCATED size_mb={size_mb} " f"total_allocated_bytes={total_allocated}"
     )
 
     return (

@@ -292,8 +292,7 @@ def run_targeted_account_attack(target: str, username: str, rate_tracker: Attack
     Tests account lockout and per-user rate limiting.
     """
     logger.info(
-        f"[TARGETED] Exhaustive spray against user={username} "
-        f"passwords={len(PASSWORDS)}"
+        f"[TARGETED] Exhaustive spray against user={username} " f"passwords={len(PASSWORDS)}"
     )
 
     source_ip = "198.51.100.50"
@@ -386,13 +385,9 @@ def main():
 
     try:
         if args.mode == "sequential":
-            run_sequential_attack(
-                args.target, args.username, args.count, args.rate, tracker
-            )
+            run_sequential_attack(args.target, args.username, args.count, args.rate, tracker)
         elif args.mode == "distributed":
-            run_distributed_attack(
-                args.target, args.count, args.concurrency, tracker
-            )
+            run_distributed_attack(args.target, args.count, args.concurrency, tracker)
         elif args.mode == "targeted":
             run_targeted_account_attack(args.target, args.username, tracker)
 

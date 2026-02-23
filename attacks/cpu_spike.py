@@ -124,7 +124,8 @@ def monitor_alert_firing(target: str, prometheus_url: str, duration: int) -> Non
             if response.status_code == 200:
                 data = response.json()
                 firing = [
-                    a for a in data.get("data", {}).get("alerts", [])
+                    a
+                    for a in data.get("data", {}).get("alerts", [])
                     if a.get("labels", {}).get("alertname") in alert_names
                     and a.get("state") == "firing"
                 ]
@@ -133,10 +134,14 @@ def monitor_alert_firing(target: str, prometheus_url: str, duration: int) -> Non
                     for alert in firing:
                         logger.info(f"  Alert: {alert['labels']['alertname']}")
                         logger.info(f"  State: {alert['state']}")
-                        logger.info(f"  Value: {alert.get('annotations', {}).get('description', 'N/A')}")
+                        logger.info(
+                            f"  Value: {alert.get('annotations', {}).get('description', 'N/A')}"
+                        )
                 else:
                     remaining = int(end_time - time.time())
-                    logger.info(f"No CPU alerts firing yet (checking again in 15s, {remaining}s remaining)")
+                    logger.info(
+                        f"No CPU alerts firing yet (checking again in 15s, {remaining}s remaining)"
+                    )
         except Exception as e:
             logger.debug(f"Could not reach Prometheus: {e}")
 
@@ -187,7 +192,11 @@ def main():
     print()
     print("  DETECTION EXPECTED:")
     print("  [x] Prometheus: HighCPUUsage (>75% for 2min)")
-    print("  [x] Prometheus: CriticalCPUSpike (>95% for 1min)" if args.intensity > 0.87 else "  [ ] CriticalCPUSpike (need intensity >0.87)")
+    print(
+        "  [x] Prometheus: CriticalCPUSpike (>95% for 1min)"
+        if args.intensity > 0.87
+        else "  [ ] CriticalCPUSpike (need intensity >0.87)"
+    )
     print("  [x] Loki: CPUSpikeInLogs (immediate from log event)")
     print("  [ ] Falco: NOT expected (no exec syscall)")
     print(f"  Alert expected in: ~{120 if simulated_cpu < 95 else 60}s")
