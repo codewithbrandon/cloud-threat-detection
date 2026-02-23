@@ -36,9 +36,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    datefmt='%Y-%m-%dT%H:%M:%SZ'
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ"
 )
 logger = logging.getLogger("brute-force-simulator")
 
@@ -183,7 +181,7 @@ def run_sequential_attack(
     username: str,
     count: int,
     rate: float,
-    result_tracker: AttackResult
+    result_tracker: AttackResult,
 ) -> None:
     """
     Sequential brute force — single source IP against single account.
@@ -222,7 +220,7 @@ def run_distributed_attack(
     target: str,
     total_attempts: int,
     concurrency: int,
-    result_tracker: AttackResult
+    result_tracker: AttackResult,
 ) -> None:
     """
     Distributed brute force — multiple source IPs, multiple usernames.
@@ -258,11 +256,7 @@ def run_distributed_attack(
                 logger.error(f"Future error: {e}")
 
 
-def run_targeted_account_attack(
-    target: str,
-    username: str,
-    rate_tracker: AttackResult
-) -> None:
+def run_targeted_account_attack(target: str, username: str, rate_tracker: AttackResult) -> None:
     """
     Exhaustive password spray against a single account.
     Tests account lockout and per-user rate limiting.
@@ -394,13 +388,17 @@ def main():
     print("=" * 70)
 
     if args.output:
-        with open(args.output, 'w') as f:
-            json.dump({
-                "attack_config": vars(args),
-                "start_time": start.isoformat(),
-                "summary": summary,
-                "results": tracker.results
-            }, f, indent=2)
+        with open(args.output, "w") as f:
+            json.dump(
+                {
+                    "attack_config": vars(args),
+                    "start_time": start.isoformat(),
+                    "summary": summary,
+                    "results": tracker.results,
+                },
+                f,
+                indent=2,
+            )
         logger.info(f"Results written to {args.output}")
 
     return 0

@@ -34,9 +34,7 @@ from datetime import datetime, timezone
 import requests
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    datefmt='%Y-%m-%dT%H:%M:%SZ'
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ"
 )
 logger = logging.getLogger("suspicious-commands-simulator")
 
@@ -71,8 +69,7 @@ def simulate_shell_execution(target: str, commands: list) -> list:
                 result["output"] = data.get("output", "")
                 result["detection_rule"] = data.get("detection_rule", "")
                 logger.info(
-                    f"  Result: {data.get('output', '')[:80]} | "
-                    f"Rule: {data.get('detection_rule')}"
+                    f"  Result: {data.get('output', '')[:80]} | " f"Rule: {data.get('detection_rule')}"
                 )
             results.append(result)
             time.sleep(1)  # 1s between commands to generate distinct Falco events
@@ -289,18 +286,18 @@ def main():
     print()
     print("  VERIFY DETECTION:")
     print("  Falco logs: kubectl logs -n threat-detection -l app=falco -f")
-    print("  Loki: {app=\"threat-detection-app\"} |= \"SUSPICIOUS_EXEC\"")
+    print('  Loki: {app="threat-detection-app"} |= "SUSPICIOUS_EXEC"')
     print("  Prometheus: http://localhost:9090/graph?g0.expr=suspicious_activity_total")
     print("  Alertmanager: http://localhost:9093")
     print("=" * 70)
 
     if args.output:
-        with open(args.output, 'w') as f:
-            json.dump({
-                "config": vars(args),
-                "start": start.isoformat(),
-                "results": results
-            }, f, indent=2)
+        with open(args.output, "w") as f:
+            json.dump(
+                {"config": vars(args), "start": start.isoformat(), "results": results},
+                f,
+                indent=2,
+            )
 
     return 0
 

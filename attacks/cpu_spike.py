@@ -31,9 +31,7 @@ from datetime import datetime, timezone
 import requests
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    datefmt='%Y-%m-%dT%H:%M:%SZ'
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ"
 )
 logger = logging.getLogger("cpu-spike-simulator")
 
@@ -43,7 +41,7 @@ def trigger_cpu_spike(
     intensity: float,
     duration: int,
     repeat: int = 1,
-    interval: float = 5.0
+    interval: float = 5.0,
 ) -> list:
     """
     Triggers CPU spike via /load endpoint.
@@ -239,12 +237,12 @@ def main():
     print("=" * 70)
 
     if args.output:
-        with open(args.output, 'w') as f:
-            json.dump({
-                "config": vars(args),
-                "start_time": start.isoformat(),
-                "results": results
-            }, f, indent=2)
+        with open(args.output, "w") as f:
+            json.dump(
+                {"config": vars(args), "start_time": start.isoformat(), "results": results},
+                f,
+                indent=2,
+            )
 
     return 0
 

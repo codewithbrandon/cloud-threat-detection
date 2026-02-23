@@ -29,17 +29,12 @@ from datetime import datetime, timezone
 import requests
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
-    datefmt='%Y-%m-%dT%H:%M:%SZ'
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ"
 )
 logger = logging.getLogger("memory-exhaustion-simulator")
 
 
-def trigger_memory_allocation(
-    target: str,
-    size_mb: int
-) -> dict:
+def trigger_memory_allocation(target: str, size_mb: int) -> dict:
     """Trigger memory allocation via /memory endpoint."""
     try:
         response = requests.post(
@@ -70,12 +65,7 @@ def release_memory(target: str) -> dict:
         return {"error": str(e), "released": False}
 
 
-def run_escalating_exhaustion(
-    target: str,
-    steps: int,
-    max_mb: int,
-    hold_seconds: int
-) -> list:
+def run_escalating_exhaustion(target: str, steps: int, max_mb: int, hold_seconds: int) -> list:
     """
     Gradually escalates memory allocation in steps.
     WHY: Gradual escalation mirrors real memory leak patterns and tests
@@ -105,8 +95,7 @@ def run_escalating_exhaustion(
         total = result.get("total_allocated_mb", 0)
         pct = (total / 512) * 100 if total else 0
         logger.info(
-            f"[STEP {step}/{steps}] Total allocated: {total}MB "
-            f"({pct:.0f}% of 512MB limit)"
+            f"[STEP {step}/{steps}] Total allocated: {total}MB " f"({pct:.0f}% of 512MB limit)"
         )
 
         # Alert thresholds
@@ -149,7 +138,7 @@ def main():
         choices=["escalating", "sudden"],
         default="escalating",
         help="escalating: gradual allocation (tests early warning alert)\n"
-             "sudden: single large allocation (tests critical alert)"
+        "sudden: single large allocation (tests critical alert)",
     )
     parser.add_argument("--size", type=int, default=480, help="Max MB to allocate")
     parser.add_argument("--steps", type=int, default=4, help="Number of allocation steps")
@@ -181,9 +170,7 @@ def main():
 
     try:
         if args.mode == "escalating":
-            results = run_escalating_exhaustion(
-                args.target, args.steps, args.size, args.hold
-            )
+            results = run_escalating_exhaustion(args.target, args.steps, args.size, args.hold)
         else:
             results = run_sudden_exhaustion(args.target, args.size)
 
@@ -208,13 +195,17 @@ def main():
     print()
     print("  VERIFY DETECTION:")
     print("  Prometheus: http://localhost:9090/alerts")
-    print("  Loki: {app=\"threat-detection-app\"} |= \"MEMORY_PRESSURE\"")
+    print('  Loki: {app="threat-detection-app"} |= "MEMORY_PRESSURE"')
     print("  Pod status: kubectl get pods -n threat-detection -w")
     print("=" * 70)
 
     if args.output:
-        with open(args.output, 'w') as f:
-            json.dump({"config": vars(args), "start": start.isoformat(), "results": results}, f, indent=2)
+        with open(args.output, "w") as f:
+            json.dump(
+                {"config": vars(args), "start": start.isoformat(), "results": results},
+                f,
+                indent=2,
+            )
 
     return 0
 
