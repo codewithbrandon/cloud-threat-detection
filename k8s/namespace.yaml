@@ -1,0 +1,30 @@
+# =============================================================================
+# Namespace — threat-detection
+# =============================================================================
+# WHY: Namespace isolation is the first defense layer in Kubernetes multi-tenancy.
+# All platform components live in this namespace, enabling:
+# - RBAC scoped to namespace (least-privilege)
+# - NetworkPolicy boundaries (no implicit cross-namespace traffic)
+# - ResourceQuota to prevent noisy-neighbor DoS
+# - Audit logging correlation by namespace label
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: threat-detection
+  labels:
+    # Pod Security Admission — enforces non-root, no privilege escalation
+    # WHY: PSA replaces deprecated PodSecurityPolicy. "restricted" profile blocks
+    # privileged containers, hostPath mounts, host networking, and root users.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+
+    # Metadata labels for monitoring and policy targeting
+    environment: production
+    team: platform-security
+    component: threat-detection
+    managed-by: kubectl

@@ -1,0 +1,122 @@
+# =============================================================================
+# Service — threat-detection-app
+# =============================================================================
+# ClusterIP only — no external exposure.
+# WHY: The app is internal-only. External access is through an Ingress with
+# TLS termination and WAF rules. Exposing directly as LoadBalancer or NodePort
+# bypasses perimeter controls and increases attack surface.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: threat-detection-app
+  namespace: threat-detection
+  labels:
+    app: threat-detection-app
+    component: application
+  annotations:
+    # Prometheus ServiceMonitor selector
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP  # Internal only — no external IP assigned
+  selector:
+    app: threat-detection-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http  # Named port reference — resilient to port changes
+      protocol: TCP
+    - name: metrics
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+# =============================================================================
+# Service — Prometheus (for scraping)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: threat-detection
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus
+  ports:
+    - name: web
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+
+---
+# =============================================================================
+# Service — Alertmanager
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: threat-detection
+  labels:
+    app: alertmanager
+    component: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: alertmanager
+  ports:
+    - name: web
+      port: 9093
+      targetPort: 9093
+      protocol: TCP
+
+---
+# =============================================================================
+# Service — Loki
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: threat-detection
+  labels:
+    app: loki
+    component: logging
+spec:
+  type: ClusterIP
+  selector:
+    app: loki
+  ports:
+    - name: http-metrics
+      port: 3100
+      targetPort: 3100
+      protocol: TCP
+
+---
+# =============================================================================
+# Service — Grafana
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: threat-detection
+  labels:
+    app: grafana
+    component: visualization
+spec:
+  type: ClusterIP
+  selector:
+    app: grafana
+  ports:
+    - name: web
+      port: 3000
+      targetPort: 3000
+      protocol: TCP

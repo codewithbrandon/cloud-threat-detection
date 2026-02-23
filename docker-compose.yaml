@@ -1,0 +1,217 @@
+# =============================================================================
+# Docker Compose — Local Development Stack
+# =============================================================================
+# For local testing WITHOUT a Kubernetes cluster.
+# Starts: Flask app + Prometheus + Alertmanager + Loki + Grafana
+#
+# Note: Falco requires kernel-level access — run on Linux host only.
+# NetworkPolicy is not enforced in Docker Compose (K8s-only feature).
+#
+# Usage:
+#   docker-compose up -d
+#   # Run attack simulations against http://localhost:8080
+#   docker-compose down
+# =============================================================================
+
+services:
+
+  # ===========================================================================
+  # Flask Application
+  # ===========================================================================
+  app:
+    build:
+      context: app/
+      dockerfile: ../docker/Dockerfile
+    container_name: threat-detection-app
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_VERSION=1.0.0
+      - FLASK_DEBUG=false
+      - ENABLE_ATTACK_SIMULATION=true
+      - LOG_LEVEL=INFO
+    # Security: non-root user (UID 1001 set in Dockerfile)
+    user: "1001:1001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Resource limits (Docker equivalent of K8s limits)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    networks:
+      - monitoring
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Prometheus
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus-compose.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert-rules-compose.yml:/etc/prometheus/rules/alert-rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--log.format=json'
+    user: "65534:65534"
+    networks:
+      - monitoring
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Alertmanager
+  # ===========================================================================
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager-compose.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--log.format=json'
+      - '--cluster.listen-address='
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Webhook Simulator (receives Alertmanager notifications)
+  # ===========================================================================
+  webhook-simulator:
+    image: python:3.12-slim
+    container_name: webhook-simulator
+    ports:
+      - "9099:9099"
+    command:
+      - python3
+      - -c
+      - |
+        import json
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                l = int(self.headers.get('Content-Length', 0))
+                b = self.rfile.read(l)
+                print(f"\n{'='*60}")
+                print(f"WEBHOOK: {self.path}")
+                try: print(json.dumps(json.loads(b), indent=2))
+                except: print(b.decode())
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+            def log_message(self, *a): pass
+        print("Webhook simulator on :9099")
+        HTTPServer(('0.0.0.0', 9099), H).serve_forever()
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Loki
+  # ===========================================================================
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Promtail (Docker log collector)
+  # ===========================================================================
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: promtail
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./monitoring/loki/promtail-compose.yaml:/etc/promtail/config.yaml:ro
+    command: -config.file=/etc/promtail/config.yaml
+    networks:
+      - monitoring
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Grafana
+  # ===========================================================================
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_LOG_LEVEL=info
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/datasources-compose.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  monitoring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  prometheus-data:
+    driver: local
+  alertmanager-data:
+    driver: local
+  loki-data:
+    driver: local
+  grafana-data:
+    driver: local

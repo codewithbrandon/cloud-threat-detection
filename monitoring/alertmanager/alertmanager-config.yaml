@@ -1,0 +1,247 @@
+# =============================================================================
+# Alertmanager Configuration
+# =============================================================================
+# WHY: Alertmanager decouples alerting from notification delivery.
+# It provides: deduplication, grouping, silencing, and multi-channel routing.
+#
+# Routing logic:
+# - critical + security = immediate Slack + PagerDuty webhook
+# - warning + security = Slack security channel
+# - critical + platform = Slack ops channel + email
+# - warning + platform = Slack ops channel
+# - Dead man's switch routed to external monitoring
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: threat-detection
+  labels:
+    app: alertmanager
+    component: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      # How long to wait before re-sending a resolved alert
+      resolve_timeout: 5m
+
+      # SMTP configuration (mock — update with real values)
+      smtp_smarthost: 'smtp.company.internal:587'
+      smtp_from: 'alerts@company.com'
+      smtp_auth_username: 'alerts@company.com'
+      smtp_auth_password: '{{ env "SMTP_PASSWORD" }}'
+      smtp_require_tls: true
+
+      # Slack webhook (simulated — replace with real Incoming Webhook URL)
+      slack_api_url: 'http://webhook-simulator:9099/slack'
+
+    # ==========================================================================
+    # Templates for notification formatting
+    # ==========================================================================
+    templates:
+      - '/etc/alertmanager/templates/*.tmpl'
+
+    # ==========================================================================
+    # Routing tree
+    # ==========================================================================
+    route:
+      # Default receiver for unmatched alerts
+      receiver: 'default-slack'
+
+      # Group alerts by these labels to reduce notification storms
+      # WHY: Without grouping, 50 simultaneous alerts from a brute force attack
+      # would send 50 separate Slack messages. Grouping sends one summary.
+      group_by: ['alertname', 'cluster', 'severity', 'namespace']
+      group_wait: 30s        # Wait for more alerts before first notification
+      group_interval: 5m     # Minimum time between re-grouped notifications
+      repeat_interval: 4h    # Re-notify if alert is still firing after this time
+
+      routes:
+        # Security critical — immediate response required
+        - match:
+            severity: critical
+            team: security
+          receiver: 'security-critical'
+          group_wait: 0s          # No delay for security criticals
+          repeat_interval: 30m    # Re-alert every 30 min until resolved
+
+        # Security warnings — security team review
+        - match:
+            severity: warning
+            team: security
+          receiver: 'security-warning'
+          repeat_interval: 1h
+
+        # Platform critical — ops team page
+        - match:
+            severity: critical
+            team: platform
+          receiver: 'platform-critical'
+          group_wait: 10s
+          repeat_interval: 1h
+
+        # Platform warnings
+        - match:
+            severity: warning
+            team: platform
+          receiver: 'platform-warning'
+          repeat_interval: 2h
+
+        # Dead man's switch — route to external watchdog
+        - match:
+            alertname: WatchdogHeartbeat
+          receiver: 'deadmans-switch'
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+
+    # ==========================================================================
+    # Inhibition Rules
+    # WHY: If a critical alert fires, suppress related warnings to reduce noise.
+    # A "ServiceUnavailable" critical inhibits "High5xxErrorRate" warnings
+    # since both describe the same underlying condition.
+    # ==========================================================================
+    inhibit_rules:
+      # Critical suppresses warning for same alertname + instance
+      - source_match:
+          severity: 'critical'
+        target_match:
+          severity: 'warning'
+        equal: ['alertname', 'cluster', 'app']
+
+      # BruteForceAttackCritical suppresses ExcessiveFailedLogins (same source_ip)
+      - source_match:
+          alertname: 'BruteForceAttackCritical'
+        target_match:
+          alertname: 'ExcessiveFailedLogins'
+        equal: ['source_ip']
+
+    # ==========================================================================
+    # Receivers
+    # ==========================================================================
+    receivers:
+      # -----------------------------------------------------------------------
+      # Default Slack channel — catches unrouted alerts
+      # -----------------------------------------------------------------------
+      - name: 'default-slack'
+        slack_configs:
+          - channel: '#platform-alerts'
+            title: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *Alert:* {{ .Annotations.summary }}
+              *Severity:* {{ .Labels.severity }}
+              *Description:* {{ .Annotations.description }}
+              *Firing since:* {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+              {{ end }}
+            send_resolved: true
+            icon_emoji: ':bell:'
+
+      # -----------------------------------------------------------------------
+      # Security Critical — Slack #security-incidents + webhook simulation
+      # -----------------------------------------------------------------------
+      - name: 'security-critical'
+        slack_configs:
+          - channel: '#security-incidents'
+            color: 'danger'
+            title: ':rotating_light: CRITICAL SECURITY ALERT: {{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *INCIDENT OPENED*
+              *Alert:* {{ .Annotations.summary }}
+              *Category:* {{ .Labels.category }}
+              *Description:* {{ .Annotations.description }}
+              *Playbook:* {{ .Annotations.runbook_url }}
+              *Dashboard:* {{ .Annotations.dashboard_url }}
+              *Time:* {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+              {{ end }}
+            send_resolved: true
+            icon_emoji: ':rotating_light:'
+
+        # Webhook to simulate PagerDuty/OpsGenie integration
+        webhook_configs:
+          - url: 'http://webhook-simulator:9099/pagerduty'
+            send_resolved: true
+            http_config:
+              follow_redirects: true
+
+        # Email notification for critical security events
+        email_configs:
+          - to: 'security-team@company.com'
+            subject: '[CRITICAL SECURITY] {{ .CommonLabels.alertname }} — {{ .CommonLabels.cluster }}'
+            body: |
+              CRITICAL SECURITY ALERT
+
+              Alert: {{ .CommonAnnotations.summary }}
+              Severity: CRITICAL
+              Cluster: {{ .CommonLabels.cluster }}
+              Namespace: {{ .CommonLabels.namespace }}
+
+              Description:
+              {{ .CommonAnnotations.description }}
+
+              Playbook: {{ .CommonAnnotations.runbook_url }}
+
+              This alert requires IMMEDIATE attention.
+              Firing since: {{ (index .Alerts 0).StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+
+              -- Automated Alert from Alertmanager
+            require_tls: true
+
+      # -----------------------------------------------------------------------
+      # Security Warning
+      # -----------------------------------------------------------------------
+      - name: 'security-warning'
+        slack_configs:
+          - channel: '#security-alerts'
+            color: 'warning'
+            title: ':warning: Security Warning: {{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *Alert:* {{ .Annotations.summary }}
+              *Description:* {{ .Annotations.description }}
+              *Time:* {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+              {{ end }}
+            send_resolved: true
+
+      # -----------------------------------------------------------------------
+      # Platform Critical
+      # -----------------------------------------------------------------------
+      - name: 'platform-critical'
+        slack_configs:
+          - channel: '#platform-oncall'
+            color: 'danger'
+            title: ':fire: CRITICAL: {{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *Alert:* {{ .Annotations.summary }}
+              *Description:* {{ .Annotations.description }}
+              {{ end }}
+            send_resolved: true
+        webhook_configs:
+          - url: 'http://webhook-simulator:9099/oncall'
+            send_resolved: true
+
+      # -----------------------------------------------------------------------
+      # Platform Warning
+      # -----------------------------------------------------------------------
+      - name: 'platform-warning'
+        slack_configs:
+          - channel: '#platform-alerts'
+            color: 'warning'
+            title: ':warning: {{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *Alert:* {{ .Annotations.summary }}
+              {{ end }}
+            send_resolved: true
+
+      # -----------------------------------------------------------------------
+      # Dead Man's Switch — external heartbeat receiver
+      # In production: configure Deadmanssnitch.com or PagerDuty dead man's switch
+      # to page if this heartbeat stops arriving.
+      # -----------------------------------------------------------------------
+      - name: 'deadmans-switch'
+        webhook_configs:
+          - url: 'http://webhook-simulator:9099/deadmans-switch'
+            send_resolved: false

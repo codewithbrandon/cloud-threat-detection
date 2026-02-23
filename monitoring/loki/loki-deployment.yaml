@@ -1,0 +1,380 @@
+# =============================================================================
+# Loki StatefulSet
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: loki
+  namespace: threat-detection
+  labels:
+    app: loki
+    component: logging
+spec:
+  serviceName: loki
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+        component: logging
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3100"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        - name: init-chown
+          image: busybox:1.36
+          command: ['sh', '-c', 'mkdir -p /loki/chunks /loki/rules && chown -R 10001:10001 /loki']
+          volumeMounts:
+            - name: loki-data
+              mountPath: /loki
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+
+      containers:
+        - name: loki
+          image: grafana/loki:3.0.0
+          args:
+            - '-config.file=/etc/loki/loki.yaml'
+          ports:
+            - name: http-metrics
+              containerPort: 3100
+            - name: grpc
+              containerPort: 9096
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http-metrics
+            initialDelaySeconds: 45
+            periodSeconds: 15
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http-metrics
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+          volumeMounts:
+            - name: loki-config
+              mountPath: /etc/loki
+            - name: loki-data
+              mountPath: /loki
+            - name: rules
+              mountPath: /loki/rules/fake  # Loki expects rules in /rules/<tenant>
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: loki-config
+          configMap:
+            name: loki-config
+        - name: rules
+          configMap:
+            name: loki-alert-rules
+        - name: tmp
+          emptyDir: {}
+
+  volumeClaimTemplates:
+    - metadata:
+        name: loki-data
+        labels:
+          app: loki
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+
+---
+# =============================================================================
+# Promtail DaemonSet — Log collector
+# =============================================================================
+# WHY: DaemonSet ensures every node runs one Promtail instance.
+# Promtail tails container logs from /var/log/containers/ (via hostPath),
+# applies pipeline stages for log parsing, and ships to Loki.
+#
+# SECURITY NOTE: Promtail requires hostPath access to read container logs.
+# This is the only hostPath exception in the platform. The path is read-only
+# and restricted to /var/log/containers only.
+# =============================================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: threat-detection
+  labels:
+    app: promtail
+    component: logging
+spec:
+  selector:
+    matchLabels:
+      app: promtail
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: promtail
+        component: logging
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9080"
+    spec:
+      serviceAccountName: promtail
+      securityContext:
+        runAsNonRoot: false  # Must run as root to read /var/log on host
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        # Run on all nodes including control plane
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+
+      containers:
+        - name: promtail
+          image: grafana/promtail:3.0.0
+          args:
+            - '-config.file=/etc/promtail/promtail.yaml'
+
+          ports:
+            - name: http-metrics
+              containerPort: 9080
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+
+          securityContext:
+            # WHY: Promtail needs to read /var/log/containers which requires
+            # access to node filesystem. readOnlyRootFilesystem still applies
+            # to Promtail's own filesystem (not the hostPath mounts).
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          volumeMounts:
+            - name: promtail-config
+              mountPath: /etc/promtail
+            # Read-only access to container logs on host
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: run
+              mountPath: /run/promtail
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: promtail-config
+          configMap:
+            name: promtail-config
+        # hostPath: only read-only log directories (necessary exception)
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: run
+          hostPath:
+            path: /run/promtail
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}
+
+---
+# Promtail ServiceAccount + RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: threat-detection
+  labels:
+    app: promtail
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: promtail
+  labels:
+    app: promtail
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+    verbs: ["get", "watch", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: promtail
+  labels:
+    app: promtail
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: threat-detection
+
+---
+# =============================================================================
+# Promtail Configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: threat-detection
+  labels:
+    app: promtail
+    component: logging
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+      log_level: info
+      log_format: json
+
+    positions:
+      # Tracks read position in log files — persists between Promtail restarts
+      filename: /run/promtail/positions.yaml
+
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+        tenant_id: threat-detection
+        backoff_config:
+          min_period: 500ms
+          max_period: 5m
+          max_retries: 10
+        timeout: 10s
+
+    scrape_configs:
+      # -----------------------------------------------------------------------
+      # Kubernetes pod log scraping
+      # WHY: Kubernetes stores container logs at /var/log/pods/*.
+      # auto_kubernetes_labels adds pod metadata automatically for Loki queries.
+      # -----------------------------------------------------------------------
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        pipeline_stages:
+          # ------------------------------------------------------------------
+          # Pipeline Stage 1: Parse container runtime log format
+          # Docker and containerd wrap log lines in JSON with stream and time.
+          # ------------------------------------------------------------------
+          - cri: {}
+
+          # ------------------------------------------------------------------
+          # Pipeline Stage 2: JSON parsing for Flask structured logs
+          # Extracts: level, logger, funcName from structured log messages.
+          # ------------------------------------------------------------------
+          - json:
+              expressions:
+                level: level
+                logger: name
+                msg: message
+
+          # ------------------------------------------------------------------
+          # Pipeline Stage 3: Security event extraction
+          # WHY: Extract specific fields from security log messages so Loki
+          # can filter by event type without full-text scanning.
+          # ------------------------------------------------------------------
+          - regex:
+              expression: '(?P<event_type>AUTHENTICATION_FAILURE|AUTHENTICATION_SUCCESS|BRUTE_FORCE_DETECTED|CPU_SPIKE_EVENT|MEMORY_PRESSURE_EVENT|SUSPICIOUS_EXEC_EVENT|SUSPICIOUS_NETWORK_EVENT|SUSPICIOUS_FILE_WRITE)'
+
+          # ------------------------------------------------------------------
+          # Pipeline Stage 4: Label assignment
+          # WHY: Labels enable efficient Loki log stream selection.
+          # Querying {app="threat-detection-app", event_type="AUTHENTICATION_FAILURE"}
+          # is orders of magnitude faster than full-text search.
+          # ------------------------------------------------------------------
+          - labels:
+              app:
+              component:
+              event_type:
+              level:
+
+          # ------------------------------------------------------------------
+          # Pipeline Stage 5: Timestamp extraction
+          # ------------------------------------------------------------------
+          - timestamp:
+              source: time
+              format: RFC3339
+
+          # ------------------------------------------------------------------
+          # Pipeline Stage 6: Drop noisy debug logs
+          # WHY: High-volume /health and /ready probe logs create noise without
+          # adding security value. Filter at collection time to reduce storage cost.
+          # ------------------------------------------------------------------
+          - drop:
+              expression: '.*(GET /health|GET /ready|GET /metrics).*'
+              drop_counter_reason: probe_noise
+
+        relabel_configs:
+          # Only scrape pods in our namespace
+          - source_labels: [__meta_kubernetes_namespace]
+            action: keep
+            regex: threat-detection
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app
+          - source_labels: [__meta_kubernetes_pod_label_component]
+            target_label: component
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node

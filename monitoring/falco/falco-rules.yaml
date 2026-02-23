@@ -1,0 +1,358 @@
+# =============================================================================
+# Falco Custom Rules — Runtime Security Detection
+# =============================================================================
+# WHY FALCO:
+# Falco intercepts Linux syscalls via eBPF or kernel module, providing
+# visibility that no application-level monitor can match. A compromised
+# process that bypasses all application logic still generates detectable
+# syscalls for: exec(), open(), connect(), clone().
+#
+# These rules extend Falco's default ruleset with platform-specific detections.
+# Load via: falco -r /etc/falco/falco.yaml -r /etc/falco/custom-rules.yaml
+# =============================================================================
+
+# =============================================================================
+# MACRO DEFINITIONS
+# WHY: Macros reduce duplication and make rule logic readable.
+# =============================================================================
+
+# Identify our target namespace's containers
+- macro: threat_detection_container
+  condition: >
+    k8s.ns.name = "threat-detection" and
+    container.name != "init-chown"
+
+# Identify suspicious shell binaries
+- macro: shell_binary
+  condition: >
+    proc.name in (sh, bash, zsh, dash, fish, ksh, tcsh, csh)
+
+# Identify dangerous system utilities that shouldn't be in app containers
+- macro: dangerous_binary
+  condition: >
+    proc.name in (
+      wget, curl, nc, ncat, nmap, netcat,
+      python, python3, perl, ruby, php,
+      gcc, cc, make, git,
+      base64, xxd, od,
+      tcpdump, strace, ltrace,
+      chmod, chown, passwd, su, sudo,
+      crontab, at, batch,
+      insmod, rmmod, modprobe
+    )
+
+# Sensitive file paths — writes here indicate tampering
+- macro: sensitive_path_write
+  condition: >
+    fd.name startswith /etc or
+    fd.name startswith /bin or
+    fd.name startswith /sbin or
+    fd.name startswith /usr/bin or
+    fd.name startswith /usr/sbin or
+    fd.name startswith /lib or
+    fd.name startswith /root or
+    fd.name = /proc/sys/kernel/core_pattern
+
+# Expected Prometheus metrics endpoint access
+- macro: expected_network_connection
+  condition: >
+    fd.sport in (8080, 9090, 9093, 3100, 3000, 9080) or
+    fd.dport in (8080, 9090, 9093, 3100, 3000, 9080, 53)
+
+# =============================================================================
+# RULE 1: Shell Spawned in Container
+# =============================================================================
+# WHY: A legitimate Flask app running Gunicorn should NEVER need to spawn
+# a shell. Shell presence indicates:
+# - Active exploitation (command injection, SSTI, RCE)
+# - Attacker established initial foothold
+# - Container escape preparation
+#
+# Maps to: app.py /exec endpoint simulation
+# MITRE ATT&CK: T1059.004 — Unix Shell
+# =============================================================================
+- rule: shell_spawned_in_container
+  desc: >
+    Detects any shell process spawned inside a container in the threat-detection
+    namespace. Flask/Gunicorn applications should never spawn interactive shells.
+  condition: >
+    threat_detection_container and
+    spawned_process and
+    shell_binary and
+    proc.pname != "runc"
+  output: >
+    FALCO_ALERT severity=CRITICAL rule=shell_spawned_in_container
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    shell=%proc.name
+    parent=%proc.pname
+    cmdline=%proc.cmdline
+    user=%user.name
+    uid=%user.uid
+    image=%container.image.repository
+    mitre_technique=T1059.004
+  priority: CRITICAL
+  tags: [container_security, runtime_attack, mitre_execution]
+
+# =============================================================================
+# RULE 2: Unexpected Outbound Network Connection
+# =============================================================================
+# WHY: The Flask app communicates only with Prometheus, Alertmanager, and Loki
+# on known ports. Any connection to external IPs indicates:
+# - C2 (command-and-control) beaconing
+# - Data exfiltration
+# - SSRF exploitation (attacker using app as proxy)
+#
+# NetworkPolicy blocks actual egress, but Falco detects the syscall attempt
+# BEFORE the kernel drops the packet — providing earlier warning.
+# MITRE ATT&CK: T1071 — Application Layer Protocol
+# =============================================================================
+- rule: unexpected_outbound_connection
+  desc: >
+    Container making outbound network connection to unexpected destination.
+    Flask app should only connect to in-cluster services on defined ports.
+  condition: >
+    threat_detection_container and
+    outbound and
+    not expected_network_connection and
+    not fd.typechar = "p"  # exclude pipes
+  output: >
+    FALCO_ALERT severity=HIGH rule=unexpected_outbound_connection
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    process=%proc.name
+    destination_ip=%fd.rip
+    destination_port=%fd.rport
+    direction=%fd.lport->%fd.rport
+    user=%user.name
+    cmdline=%proc.cmdline
+    mitre_technique=T1071
+  priority: HIGH
+  tags: [network_security, exfiltration, mitre_command_and_control]
+
+# =============================================================================
+# RULE 3: Write to Sensitive File Path
+# =============================================================================
+# WHY: A running container should have readOnlyRootFilesystem: true.
+# Any write to /etc, /bin, /usr indicates:
+# - Privilege escalation attempt
+# - Persistence mechanism installation (cron, init script)
+# - Binary replacement (replacing system tools with malicious versions)
+#
+# MITRE ATT&CK: T1222 — File and Directory Permissions Modification
+#               T1574 — Hijack Execution Flow
+# =============================================================================
+- rule: write_sensitive_file
+  desc: >
+    Process attempting to write to a sensitive filesystem path.
+    With readOnlyRootFilesystem enforced, this should never succeed but
+    the syscall attempt itself is a detection signal.
+  condition: >
+    threat_detection_container and
+    open_write and
+    sensitive_path_write
+  output: >
+    FALCO_ALERT severity=CRITICAL rule=write_sensitive_file
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    process=%proc.name
+    file=%fd.name
+    user=%user.name
+    cmdline=%proc.cmdline
+    mitre_technique=T1222
+  priority: CRITICAL
+  tags: [file_integrity, persistence, mitre_persistence]
+
+# =============================================================================
+# RULE 4: Dangerous Binary Execution
+# =============================================================================
+# WHY: Production containers should not contain wget, curl, nc, nmap, or
+# compilers. If these are executed, it indicates either:
+# - The image has unnecessary tooling (image hardening failure)
+# - An attacker downloaded tools post-compromise
+# - A supply chain compromise introduced unexpected binaries
+#
+# MITRE ATT&CK: T1105 — Ingress Tool Transfer
+# =============================================================================
+- rule: dangerous_binary_in_container
+  desc: >
+    Network or development tool executed inside application container.
+    These binaries should not exist in production images and indicate
+    either image hygiene failure or active post-compromise tool staging.
+  condition: >
+    threat_detection_container and
+    spawned_process and
+    dangerous_binary
+  output: >
+    FALCO_ALERT severity=HIGH rule=dangerous_binary_in_container
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    binary=%proc.name
+    parent=%proc.pname
+    cmdline=%proc.cmdline
+    user=%user.name
+    mitre_technique=T1105
+  priority: HIGH
+  tags: [container_security, tool_staging, mitre_command_and_control]
+
+# =============================================================================
+# RULE 5: Container Running as Root
+# =============================================================================
+# WHY: Despite runAsNonRoot: true in securityContext, misconfigurations
+# can allow root execution. Root in a container has UID 0 on the host if
+# user namespace remapping isn't enabled.
+# =============================================================================
+- rule: container_running_as_root
+  desc: >
+    Process running as root (UID 0) inside container.
+    Kubernetes securityContext should prevent this — if detected, indicates
+    securityContext misconfiguration or container escape escalation.
+  condition: >
+    threat_detection_container and
+    spawned_process and
+    user.uid = 0 and
+    not proc.name in (runc, containerd-shim, init)
+  output: >
+    FALCO_ALERT severity=HIGH rule=container_running_as_root
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    process=%proc.name
+    uid=%user.uid
+    cmdline=%proc.cmdline
+  priority: HIGH
+  tags: [privilege_escalation, container_security]
+
+# =============================================================================
+# RULE 6: /proc Filesystem Access
+# =============================================================================
+# WHY: Accessing /proc/1 (init process) or /proc/*/mem from a container
+# is a classic container escape technique. Also used for:
+# - Process injection
+# - Credential harvesting from memory
+# - Host process enumeration
+#
+# MITRE ATT&CK: T1057 — Process Discovery, T1055 — Process Injection
+# =============================================================================
+- rule: proc_filesystem_access
+  desc: >
+    Container accessing /proc filesystem paths that indicate host introspection
+    or process injection attempts.
+  condition: >
+    threat_detection_container and
+    open_read and
+    (
+      fd.name startswith /proc/1 or
+      fd.name = /proc/kcore or
+      fd.name startswith /proc/sys/kernel
+    )
+  output: >
+    FALCO_ALERT severity=CRITICAL rule=proc_filesystem_access
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    process=%proc.name
+    path=%fd.name
+    user=%user.name
+    cmdline=%proc.cmdline
+    mitre_technique=T1057
+  priority: CRITICAL
+  tags: [container_escape, privilege_escalation, mitre_discovery]
+
+# =============================================================================
+# RULE 7: Cryptocurrency Miner Detected
+# =============================================================================
+# WHY: Crypto miners are a common payload in compromised containers.
+# They consume maximum CPU, degrade service performance, and generate
+# large egress to mining pools. Detected by process name and network behavior.
+#
+# MITRE ATT&CK: T1496 — Resource Hijacking
+# =============================================================================
+- rule: crypto_miner_detected
+  desc: >
+    Known cryptocurrency mining binary executed in container.
+    This indicates a successful compromise with resource hijacking intent.
+  condition: >
+    threat_detection_container and
+    spawned_process and
+    (
+      proc.name in (xmrig, xmr-stak, minerd, cryptonight, cpuminer, ethminer) or
+      proc.cmdline contains "--mine" or
+      proc.cmdline contains "stratum+tcp" or
+      proc.cmdline contains "monero"
+    )
+  output: >
+    FALCO_ALERT severity=CRITICAL rule=crypto_miner_detected
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    miner=%proc.name
+    cmdline=%proc.cmdline
+    user=%user.name
+    mitre_technique=T1496
+  priority: CRITICAL
+  tags: [compromise, resource_hijacking, mitre_impact]
+
+# =============================================================================
+# RULE 8: Kubernetes Secret Access from Container
+# =============================================================================
+# WHY: If automountServiceAccountToken is disabled (as we've configured),
+# containers should never access the K8s API. Any attempt to read
+# /var/run/secrets/ indicates a confused deputy attack or misconfiguration.
+# =============================================================================
+- rule: k8s_secret_access_in_container
+  desc: >
+    Container reading Kubernetes service account token or secret mount.
+    With automountServiceAccountToken disabled, this path should not exist.
+    If detected, indicates configuration drift or container escape attempt.
+  condition: >
+    threat_detection_container and
+    open_read and
+    (
+      fd.name startswith /var/run/secrets/kubernetes.io or
+      fd.name startswith /run/secrets/kubernetes.io
+    )
+  output: >
+    FALCO_ALERT severity=CRITICAL rule=k8s_secret_access_in_container
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    process=%proc.name
+    secret_path=%fd.name
+    user=%user.name
+    cmdline=%proc.cmdline
+  priority: CRITICAL
+  tags: [credential_access, container_security, mitre_credential_access]
+
+# =============================================================================
+# RULE 9: Privilege Escalation Attempt
+# =============================================================================
+# WHY: setuid/setgid system calls indicate a process attempting to change
+# its privilege level. With allowPrivilegeEscalation: false, the kernel
+# blocks these — but Falco detects the attempt itself.
+# =============================================================================
+- rule: privilege_escalation_attempt
+  desc: >
+    Process attempting privilege escalation via setuid/setgid syscall.
+    With allowPrivilegeEscalation:false in securityContext, this should fail
+    but the attempt is still a high-fidelity detection signal.
+  condition: >
+    threat_detection_container and
+    evt.type in (setuid, setgid) and
+    user.uid != 0 and
+    evt.res = 0  # Succeeded — securityContext may not be enforced
+  output: >
+    FALCO_ALERT severity=CRITICAL rule=privilege_escalation_attempt
+    container=%container.name
+    namespace=%k8s.ns.name
+    pod=%k8s.pod.name
+    process=%proc.name
+    uid=%user.uid
+    new_uid=%evt.arg.uid
+    cmdline=%proc.cmdline
+  priority: CRITICAL
+  tags: [privilege_escalation, mitre_privilege_escalation]

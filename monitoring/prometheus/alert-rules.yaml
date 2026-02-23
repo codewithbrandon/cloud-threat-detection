@@ -1,0 +1,370 @@
+# =============================================================================
+# Prometheus Alert Rules
+# =============================================================================
+# WHY EACH ALERT EXISTS:
+# These rules translate raw metrics into actionable security signals.
+# Each alert targets a specific threat scenario and maps to an incident playbook.
+#
+# Severity levels:
+#   critical — page on-call immediately (PagerDuty)
+#   warning  — notify Slack security channel
+#   info     — log for trend analysis, no immediate action required
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alert-rules
+  namespace: threat-detection
+  labels:
+    app: prometheus
+    component: alert-rules
+data:
+  security-alerts.yml: |
+    groups:
+
+      # ========================================================================
+      # GROUP 1: Authentication & Access Control Alerts
+      # ========================================================================
+      - name: authentication_security
+        interval: 30s  # Evaluate every 30s for fast brute force detection
+
+        rules:
+          # -----------------------------------------------------------------------
+          # ALERT: ExcessiveFailedLogins
+          # WHY: Brute force attacks generate high volumes of failed logins in
+          # short windows. Normal user error rate is 0-2 failures/minute.
+          # >10/minute from any single IP suggests automated attack tooling.
+          # Detection: failed_logins_total > 10 in 2-minute window
+          # Playbook: docs/incident-playbook-brute-force.md
+          # -----------------------------------------------------------------------
+          - alert: ExcessiveFailedLogins
+            expr: |
+              sum(increase(failed_logins_total[2m])) by (source_ip) > 10
+            for: 1m
+            labels:
+              severity: warning
+              team: security
+              category: authentication
+              playbook: brute-force
+            annotations:
+              summary: "Brute force login attempt detected from {{ $labels.source_ip }}"
+              description: |
+                {{ $value }} failed login attempts in the last 2 minutes from
+                source IP {{ $labels.source_ip }}.
+                Normal threshold: <3 failures/2min.
+                Action: Block source IP, review authentication logs in Loki.
+              runbook_url: "https://wiki.internal/playbooks/brute-force"
+              dashboard_url: "http://grafana:3000/d/auth-security"
+
+          # -----------------------------------------------------------------------
+          # ALERT: BruteForceAttackCritical
+          # WHY: Escalation of ExcessiveFailedLogins. If rate exceeds 50/minute,
+          # this is an active, sustained attack. Immediate containment required.
+          # -----------------------------------------------------------------------
+          - alert: BruteForceAttackCritical
+            expr: |
+              sum(increase(failed_logins_total[1m])) by (source_ip) > 50
+            for: 0m  # Fire immediately — no evaluation window
+            labels:
+              severity: critical
+              team: security
+              category: authentication
+              playbook: brute-force
+              page_oncall: "true"
+            annotations:
+              summary: "CRITICAL: Active brute force attack from {{ $labels.source_ip }}"
+              description: |
+                ACTIVE ATTACK: {{ $value }} failed logins in 1 minute from {{ $labels.source_ip }}.
+                Immediate actions:
+                1. Apply NetworkPolicy to block source IP
+                2. Review Loki for compromised accounts
+                3. Rotate credentials for targeted accounts
+                4. Escalate to incident response team
+
+      # ========================================================================
+      # GROUP 2: Resource Anomaly Alerts (CPU/Memory)
+      # ========================================================================
+      - name: resource_anomaly
+        interval: 30s
+
+        rules:
+          # -----------------------------------------------------------------------
+          # ALERT: HighCPUUsage
+          # WHY: Sustained CPU spikes in containers indicate crypto mining,
+          # fork bomb conditions, or runaway malicious processes.
+          # Normal baseline: 5-25%. Spike threshold: >75% for >2 minutes.
+          # -----------------------------------------------------------------------
+          - alert: HighCPUUsage
+            expr: |
+              app_cpu_usage_percent > 75
+            for: 2m
+            labels:
+              severity: warning
+              team: platform
+              category: resource
+            annotations:
+              summary: "High CPU usage on {{ $labels.app }} pod"
+              description: |
+                CPU usage is {{ $value | humanize }}% (threshold: 75%) for >2 minutes.
+                Possible causes: CPU spike attack simulation, crypto miner, fork bomb.
+                Check: kubectl top pods -n threat-detection
+
+          # -----------------------------------------------------------------------
+          # ALERT: CriticalCPUSpike
+          # WHY: >95% CPU for >1 minute indicates a severe event.
+          # Triggers page-out since container may be unresponsive.
+          # -----------------------------------------------------------------------
+          - alert: CriticalCPUSpike
+            expr: |
+              app_cpu_usage_percent > 95
+            for: 1m
+            labels:
+              severity: critical
+              team: platform
+              category: resource
+              page_oncall: "true"
+            annotations:
+              summary: "CRITICAL: CPU spike >95% on {{ $labels.app }}"
+              description: |
+                CPU is {{ $value | humanize }}% — container may be unresponsive.
+                Liveness probe failure likely. Check for pod restart spike.
+
+          # -----------------------------------------------------------------------
+          # ALERT: HighMemoryUsage
+          # WHY: Memory exhaustion leads to OOM kills and pod restarts.
+          # Each restart creates a new pod with a new log stream, breaking
+          # audit continuity. Alert before OOM to allow graceful handling.
+          # Threshold: 75% of 512Mi limit = ~384Mi
+          # -----------------------------------------------------------------------
+          - alert: HighMemoryUsage
+            expr: |
+              app_memory_usage_bytes > (384 * 1024 * 1024)
+            for: 2m
+            labels:
+              severity: warning
+              team: platform
+              category: resource
+            annotations:
+              summary: "High memory usage on {{ $labels.app }}"
+              description: |
+                Memory usage is {{ $value | humanizeBytes }} (75% of 512Mi limit).
+                Risk: OOM kill imminent. Pod restart breaks audit trail.
+                Action: Review /memory endpoint activity, clear allocated memory.
+
+          # -----------------------------------------------------------------------
+          # ALERT: MemoryExhaustionCritical
+          # WHY: >90% of limit — OOM kill within seconds. Immediate response.
+          # -----------------------------------------------------------------------
+          - alert: MemoryExhaustionCritical
+            expr: |
+              app_memory_usage_bytes > (460 * 1024 * 1024)
+            for: 0m
+            labels:
+              severity: critical
+              team: platform
+              category: resource
+              page_oncall: "true"
+            annotations:
+              summary: "CRITICAL: Memory exhaustion imminent on {{ $labels.app }}"
+              description: |
+                Memory at {{ $value | humanizeBytes }} (>90% of 512Mi limit).
+                OOM kill imminent. Exec into pod or scale horizontally immediately.
+
+      # ========================================================================
+      # GROUP 3: HTTP Error Rate Alerts
+      # ========================================================================
+      - name: http_errors
+        interval: 30s
+
+        rules:
+          # -----------------------------------------------------------------------
+          # ALERT: High5xxErrorRate
+          # WHY: 5xx errors indicate application crashes, misconfigurations,
+          # or upstream dependency failures. Sustained 5xx often precedes
+          # full service outage. Normal rate: <0.1%.
+          # -----------------------------------------------------------------------
+          - alert: High5xxErrorRate
+            expr: |
+              sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (app)
+              /
+              sum(rate(http_requests_total[5m])) by (app)
+              > 0.05
+            for: 2m
+            labels:
+              severity: warning
+              team: platform
+              category: availability
+            annotations:
+              summary: "High 5xx error rate on {{ $labels.app }}"
+              description: |
+                5xx error rate is {{ $value | humanizePercentage }} (threshold: 5%).
+                Check application logs and resource utilization.
+
+          # -----------------------------------------------------------------------
+          # ALERT: ServiceUnavailable
+          # WHY: >50% error rate means the service is effectively down.
+          # -----------------------------------------------------------------------
+          - alert: ServiceUnavailable
+            expr: |
+              sum(rate(http_requests_total{status_code=~"5.."}[2m])) by (app)
+              /
+              sum(rate(http_requests_total[2m])) by (app)
+              > 0.5
+            for: 1m
+            labels:
+              severity: critical
+              team: platform
+              category: availability
+              page_oncall: "true"
+            annotations:
+              summary: "CRITICAL: Service {{ $labels.app }} is effectively unavailable"
+              description: |
+                >50% of requests returning 5xx. Service is down.
+                Check pod status, resource limits, and node conditions.
+
+      # ========================================================================
+      # GROUP 4: Pod Stability Alerts
+      # ========================================================================
+      - name: pod_stability
+        interval: 60s
+
+        rules:
+          # -----------------------------------------------------------------------
+          # ALERT: PodCrashLoopDetected
+          # WHY: A crashing pod restarts repeatedly, creating log stream gaps
+          # that blind detection systems. Also indicates memory exhaustion,
+          # OOM kills, or failed liveness probes from CPU spike.
+          # kube_pod_container_status_restarts_total sourced from kube-state-metrics.
+          # -----------------------------------------------------------------------
+          - alert: PodCrashLoopDetected
+            expr: |
+              increase(kube_pod_container_status_restarts_total{
+                namespace="threat-detection"
+              }[15m]) > 3
+            for: 0m
+            labels:
+              severity: critical
+              team: platform
+              category: stability
+              page_oncall: "true"
+            annotations:
+              summary: "Pod crash loop: {{ $labels.pod }} in {{ $labels.namespace }}"
+              description: |
+                Pod {{ $labels.pod }} has restarted {{ $value }} times in 15 minutes.
+                Crash loop breaks audit continuity and indicates severe instability.
+                Check: kubectl describe pod {{ $labels.pod }} -n {{ $labels.namespace }}
+
+          # -----------------------------------------------------------------------
+          # ALERT: PodNotReady
+          # WHY: Pod stuck in non-Ready state means traffic is not being served
+          # but the pod is consuming resources. May indicate a hanging process
+          # or readiness probe failure from CPU overload.
+          # -----------------------------------------------------------------------
+          - alert: PodNotReady
+            expr: |
+              kube_pod_status_ready{
+                namespace="threat-detection",
+                condition="true"
+              } == 0
+            for: 5m
+            labels:
+              severity: warning
+              team: platform
+              category: availability
+            annotations:
+              summary: "Pod {{ $labels.pod }} not ready for >5 minutes"
+              description: |
+                Pod {{ $labels.pod }} has failed readiness probes for >5 minutes.
+                Traffic has been removed from Service endpoint list.
+
+      # ========================================================================
+      # GROUP 5: Security Event Alerts
+      # ========================================================================
+      - name: security_events
+        interval: 15s  # Fast evaluation for real-time security alerting
+
+        rules:
+          # -----------------------------------------------------------------------
+          # ALERT: SuspiciousActivityDetected
+          # WHY: suspicious_activity_total tracks exec, file writes, network probes,
+          # and brute force markers. Any non-zero rate indicates active simulation
+          # OR a real threat event that bypassed other controls.
+          # -----------------------------------------------------------------------
+          - alert: SuspiciousActivityDetected
+            expr: |
+              sum(increase(suspicious_activity_total[5m])) by (activity_type) > 0
+            for: 0m
+            labels:
+              severity: warning
+              team: security
+              category: threat_detection
+            annotations:
+              summary: "Suspicious activity: {{ $labels.activity_type }}"
+              description: |
+                {{ $value }} instances of {{ $labels.activity_type }} detected in 5m.
+                Review Falco alerts and Loki logs for correlation.
+                This may indicate: container compromise, lateral movement, or attack simulation.
+
+          # -----------------------------------------------------------------------
+          # ALERT: ApplicationErrorSpike
+          # WHY: Sudden spikes in application errors may indicate:
+          # - Active exploitation causing unexpected code paths
+          # - Input validation bypass (SQLi, command injection attempts)
+          # - Resource exhaustion from attack traffic
+          # -----------------------------------------------------------------------
+          - alert: ApplicationErrorSpike
+            expr: |
+              sum(increase(app_errors_total[5m])) by (category) > 20
+            for: 1m
+            labels:
+              severity: warning
+              team: security
+              category: application_security
+            annotations:
+              summary: "Application error spike: {{ $labels.category }}"
+              description: |
+                {{ $value }} {{ $labels.category }} errors in 5 minutes.
+                Potential exploitation attempt. Review application logs.
+
+      # ========================================================================
+      # GROUP 6: Monitoring Infrastructure Health
+      # ========================================================================
+      - name: monitoring_health
+        interval: 60s
+
+        rules:
+          # -----------------------------------------------------------------------
+          # ALERT: PrometheusTargetDown
+          # WHY: A down scrape target means blind spots in monitoring.
+          # If the Flask app goes down, we lose all security metrics.
+          # -----------------------------------------------------------------------
+          - alert: PrometheusTargetDown
+            expr: up == 0
+            for: 2m
+            labels:
+              severity: critical
+              team: platform
+              category: monitoring
+            annotations:
+              summary: "Scrape target down: {{ $labels.job }}"
+              description: |
+                Prometheus cannot scrape {{ $labels.instance }} (job: {{ $labels.job }}).
+                This creates a monitoring blind spot. Investigate immediately.
+
+          # -----------------------------------------------------------------------
+          # Dead Man's Switch — Alertmanager heartbeat
+          # WHY: Ensures Alertmanager is routing alerts. If this stops firing,
+          # the alerting pipeline is broken and ALL alerts are silently dropped.
+          # Configure an external monitor to page if this alert stops arriving.
+          # -----------------------------------------------------------------------
+          - alert: WatchdogHeartbeat
+            expr: vector(1)
+            labels:
+              severity: none
+              team: platform
+              category: monitoring
+            annotations:
+              summary: "Watchdog — alerting pipeline is healthy"
+              description: |
+                This alert fires continuously. If it stops, the alerting pipeline
+                is broken. Configure an external dead man's switch to detect silence.

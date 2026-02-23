@@ -1,0 +1,174 @@
+# =============================================================================
+# Prometheus Deployment + RBAC
+# =============================================================================
+# Prometheus needs ClusterRole to discover pods via kubernetes_sd_configs.
+# WHY: Pod discovery via the K8s API requires read access to pods, endpoints,
+# and nodes. We use the minimum required permissions.
+# =============================================================================
+
+# RBAC: ClusterRole for pod/service discovery
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-discovery
+  labels:
+    app: prometheus
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/proxy
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-discovery
+  labels:
+    app: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-discovery
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: threat-detection
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: threat-detection
+  labels:
+    app: prometheus
+
+---
+# Prometheus StatefulSet (preferred over Deployment for data persistence)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prometheus
+  namespace: threat-detection
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  serviceName: prometheus
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        component: monitoring
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534  # nobody user
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+
+      initContainers:
+        # Fix permissions on data volume before Prometheus starts
+        - name: init-chown
+          image: busybox:1.36
+          command: ['sh', '-c', 'chown -R 65534:65534 /prometheus']
+          volumeMounts:
+            - name: prometheus-data
+              mountPath: /prometheus
+          securityContext:
+            runAsUser: 0  # Needs root for chown
+            allowPrivilegeEscalation: false
+
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.0
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--storage.tsdb.retention.time=15d'   # 15-day retention for incident review
+            - '--storage.tsdb.retention.size=8GB'
+            - '--web.enable-lifecycle'               # Allow config reload via API
+            - '--web.enable-admin-api'
+            - '--log.level=info'
+            - '--log.format=json'
+
+          ports:
+            - name: web
+              containerPort: 9090
+
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 30
+            periodSeconds: 15
+
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus
+            - name: alert-rules
+              mountPath: /etc/prometheus/rules
+            - name: prometheus-data
+              mountPath: /prometheus
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+        - name: alert-rules
+          configMap:
+            name: prometheus-alert-rules
+        - name: tmp
+          emptyDir: {}
+
+  # Persistent storage for metrics data
+  volumeClaimTemplates:
+    - metadata:
+        name: prometheus-data
+        labels:
+          app: prometheus
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

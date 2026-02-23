@@ -1,0 +1,71 @@
+# =============================================================================
+# ResourceQuota + LimitRange — Namespace Resource Governance
+# =============================================================================
+# WHY: Without quotas, a single misbehaving or compromised workload can exhaust
+# node resources, creating a Denial-of-Service condition for all other tenants.
+#
+# ResourceQuota sets hard namespace-wide limits.
+# LimitRange sets per-Pod/Container defaults and maxima.
+# Together they implement the "resource sandbox" required for multi-tenant K8s.
+# =============================================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: threat-detection-quota
+  namespace: threat-detection
+  annotations:
+    security.policy/purpose: "Prevent resource exhaustion DoS from any single namespace tenant"
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "2"           # Total CPU requests across all pods
+    limits.cpu: "4"             # Total CPU limits across all pods
+    requests.memory: "1Gi"      # Total memory requests
+    limits.memory: "4Gi"        # Total memory limits
+
+    # Object count limits — prevent API server flooding
+    pods: "20"                  # Max pods in namespace
+    services: "10"
+    configmaps: "20"
+    secrets: "20"
+    persistentvolumeclaims: "5"
+
+    # Restrict LoadBalancer creation (cost and exposure control)
+    services.loadbalancers: "0"
+    services.nodeports: "0"
+
+---
+# LimitRange: Default and max values for containers that don't specify limits
+# WHY: If a deployment doesn't set resource limits, LimitRange injects defaults.
+# This prevents new workloads from running unconstrained.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: threat-detection-limits
+  namespace: threat-detection
+spec:
+  limits:
+    - type: Container
+      default:             # Applied if container doesn't specify limits
+        cpu: "200m"
+        memory: "256Mi"
+      defaultRequest:     # Applied if container doesn't specify requests
+        cpu: "50m"
+        memory: "64Mi"
+      max:                # Hard ceiling per container
+        cpu: "1000m"
+        memory: "1Gi"
+      min:                # Minimum to ensure resource accounting works
+        cpu: "10m"
+        memory: "16Mi"
+
+    - type: Pod
+      max:
+        cpu: "2000m"
+        memory: "2Gi"
+
+    - type: PersistentVolumeClaim
+      max:
+        storage: "5Gi"
+      min:
+        storage: "1Mi"

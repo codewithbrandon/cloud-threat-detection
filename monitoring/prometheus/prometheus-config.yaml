@@ -1,0 +1,151 @@
+# =============================================================================
+# Prometheus Configuration — ConfigMap
+# =============================================================================
+# WHY: Prometheus is the metrics backbone. Every alert rule depends on
+# accurate scrape configuration. We scrape:
+# 1. The Flask app (/metrics endpoint)
+# 2. Kubernetes node metrics (via kube-state-metrics)
+# 3. Prometheus itself (self-monitoring for alerting on Prometheus failures)
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: threat-detection
+  labels:
+    app: prometheus
+    component: monitoring
+data:
+  prometheus.yml: |
+    global:
+      # How often Prometheus scrapes targets
+      # 15s provides sufficient resolution for security alerting without
+      # overwhelming the Flask app's /metrics endpoint
+      scrape_interval: 15s
+      evaluation_interval: 15s  # How often alert rules are evaluated
+      scrape_timeout: 10s
+
+      # External labels appended to all alerts — enables multi-cluster routing
+      external_labels:
+        cluster: 'threat-detection-cluster'
+        environment: 'production'
+        region: 'us-east-1'
+
+    # Alertmanager connection
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - 'alertmanager:9093'
+          timeout: 10s
+
+    # Alert rule files
+    rule_files:
+      - '/etc/prometheus/rules/*.yml'
+
+    # ==========================================================================
+    # Scrape configurations
+    # ==========================================================================
+    scrape_configs:
+      # --------------------------------------------------------------------------
+      # Flask Application Metrics
+      # WHY: Direct scrape of the app's Prometheus client output.
+      # Captures: http_requests_total, failed_logins_total, cpu_usage_percent,
+      # memory_usage_bytes, suspicious_activity_total.
+      # --------------------------------------------------------------------------
+      - job_name: 'threat-detection-app'
+        static_configs:
+          - targets: ['threat-detection-app:8080']
+            labels:
+              app: 'threat-detection-app'
+              component: 'application'
+              namespace: 'threat-detection'
+        metrics_path: '/metrics'
+        scrape_interval: 15s
+
+      # --------------------------------------------------------------------------
+      # Prometheus self-monitoring
+      # WHY: If Prometheus fails, we need another signal. Self-scrape enables
+      # internal health metrics. In production, use Alertmanager's dead-man's-switch.
+      # --------------------------------------------------------------------------
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+            labels:
+              app: 'prometheus'
+              component: 'monitoring'
+
+      # --------------------------------------------------------------------------
+      # Kubernetes pod discovery (requires RBAC ClusterRole)
+      # WHY: Auto-discovers all pods with prometheus.io/scrape: "true" annotation.
+      # Eliminates manual target configuration as workloads scale.
+      # --------------------------------------------------------------------------
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - threat-detection
+        relabel_configs:
+          # Only scrape pods with the annotation
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          # Use custom metrics path if annotated
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Use custom port if annotated
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          # Add pod metadata as labels for alert correlation
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: replace
+            target_label: app
+
+      # --------------------------------------------------------------------------
+      # kube-state-metrics — Kubernetes object state
+      # WHY: Exposes pod restart counts, deployment status, node conditions.
+      # PodCrashLoop alert depends on kube_pod_container_status_restarts_total.
+      # --------------------------------------------------------------------------
+      - job_name: 'kube-state-metrics'
+        static_configs:
+          - targets: ['kube-state-metrics.kube-system.svc.cluster.local:8080']
+            labels:
+              component: 'kube-state-metrics'
+
+      # --------------------------------------------------------------------------
+      # Node Exporter — host-level metrics (if deployed)
+      # WHY: Provides actual CPU/memory/disk metrics from the node.
+      # App-reported metrics may not reflect container cgroup limits.
+      # --------------------------------------------------------------------------
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__address__]
+            regex: '(.*):10250'
+            replacement: '${1}:9100'
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+
+      # --------------------------------------------------------------------------
+      # Alertmanager self-monitoring
+      # --------------------------------------------------------------------------
+      - job_name: 'alertmanager'
+        static_configs:
+          - targets: ['alertmanager:9093']
+            labels:
+              app: 'alertmanager'
+              component: 'monitoring'

@@ -1,0 +1,187 @@
+# =============================================================================
+# Alertmanager Deployment
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alertmanager
+  namespace: threat-detection
+  labels:
+    app: alertmanager
+    component: monitoring
+spec:
+  serviceName: alertmanager
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+        component: monitoring
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+            - '--storage.path=/alertmanager'
+            - '--log.level=info'
+            - '--log.format=json'
+            - '--cluster.listen-address='    # Single-node — disable clustering
+
+          ports:
+            - name: web
+              containerPort: 9093
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 30
+            periodSeconds: 15
+
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          volumeMounts:
+            - name: alertmanager-config
+              mountPath: /etc/alertmanager
+            - name: alertmanager-data
+              mountPath: /alertmanager
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: alertmanager-config
+          configMap:
+            name: alertmanager-config
+        - name: tmp
+          emptyDir: {}
+
+  volumeClaimTemplates:
+    - metadata:
+        name: alertmanager-data
+        labels:
+          app: alertmanager
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+
+---
+# =============================================================================
+# Webhook Simulator — simulates Slack/PagerDuty receivers
+# WHY: In a demo environment we don't want real external notifications.
+# This simple HTTP receiver logs all incoming alerts to stdout for verification.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-simulator
+  namespace: threat-detection
+  labels:
+    app: webhook-simulator
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhook-simulator
+  template:
+    metadata:
+      labels:
+        app: webhook-simulator
+        component: monitoring
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook-simulator
+          # Simple Python HTTP server that logs webhook payloads
+          image: python:3.12-slim
+          command:
+            - python3
+            - -c
+            - |
+              import json
+              from http.server import HTTPServer, BaseHTTPRequestHandler
+              class WebhookHandler(BaseHTTPRequestHandler):
+                  def do_POST(self):
+                      length = int(self.headers.get('Content-Length', 0))
+                      body = self.rfile.read(length)
+                      try:
+                          payload = json.loads(body)
+                          print(f"WEBHOOK RECEIVED path={self.path}")
+                          print(json.dumps(payload, indent=2))
+                      except Exception:
+                          print(f"WEBHOOK RECEIVED path={self.path} body={body}")
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b'{"status":"ok"}')
+                  def log_message(self, format, *args):
+                      pass  # Suppress default access log
+              print("Webhook simulator listening on :9099")
+              HTTPServer(('0.0.0.0', 9099), WebhookHandler).serve_forever()
+          ports:
+            - name: http
+              containerPort: 9099
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-simulator
+  namespace: threat-detection
+  labels:
+    app: webhook-simulator
+spec:
+  type: ClusterIP
+  selector:
+    app: webhook-simulator
+  ports:
+    - name: http
+      port: 9099
+      targetPort: 9099

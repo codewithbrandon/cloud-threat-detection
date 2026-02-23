@@ -1,0 +1,229 @@
+# =============================================================================
+# NetworkPolicy — East-West Traffic Control
+# =============================================================================
+# WHY: By default, Kubernetes allows all pod-to-pod communication across all
+# namespaces. A compromised pod can reach any other pod without restriction.
+# NetworkPolicy implements a zero-trust micro-segmentation model:
+# - Default deny all ingress and egress
+# - Explicit allow rules for each required communication path
+# - Documented rationale for each exception
+#
+# Requirement: A CNI plugin that supports NetworkPolicy (Calico, Cilium, etc.)
+# =============================================================================
+
+# Policy 1: Default-deny ALL ingress and egress for the namespace
+# WHY: Allowlist-based model — everything blocked unless explicitly permitted.
+# Kubernetes does not have a built-in default-deny; this must be created.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: threat-detection
+  annotations:
+    security.policy/purpose: "Baseline zero-trust deny-all for namespace isolation"
+spec:
+  podSelector: {}  # Applies to ALL pods in namespace
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress or egress rules = deny all
+
+---
+# Policy 2: Allow Prometheus to scrape the Flask app
+# WHY: Prometheus needs pull access to /metrics on port 8080.
+# Restricted to pods labeled app=prometheus only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: threat-detection
+  annotations:
+    security.policy/purpose: "Allow Prometheus to scrape application metrics"
+spec:
+  podSelector:
+    matchLabels:
+      app: threat-detection-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Policy 3: Allow attack simulation scripts to reach the app
+# WHY: Attack scripts run as a separate pod. They need HTTP access to
+# /login, /load, /memory, /exec endpoints for simulation.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-attack-simulation-ingress
+  namespace: threat-detection
+  annotations:
+    security.policy/purpose: "Allow attack simulator pod to reach app endpoints"
+spec:
+  podSelector:
+    matchLabels:
+      app: threat-detection-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: attack-simulator
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Policy 4: Allow Prometheus to reach Alertmanager
+# WHY: Prometheus sends alerts to Alertmanager via HTTP POST.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-to-alertmanager
+  namespace: threat-detection
+spec:
+  podSelector:
+    matchLabels:
+      app: alertmanager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9093
+
+---
+# Policy 5: Allow Promtail to push logs to Loki
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-promtail-to-loki
+  namespace: threat-detection
+spec:
+  podSelector:
+    matchLabels:
+      app: loki
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: promtail
+      ports:
+        - protocol: TCP
+          port: 3100
+
+---
+# Policy 6: Allow Grafana to query Prometheus and Loki
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana-datasources
+  namespace: threat-detection
+spec:
+  podSelector:
+    matchLabels:
+      app: prometheus
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: grafana
+      ports:
+        - protocol: TCP
+          port: 9090
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana-to-loki
+  namespace: threat-detection
+spec:
+  podSelector:
+    matchLabels:
+      app: loki
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: grafana
+      ports:
+        - protocol: TCP
+          port: 3100
+
+---
+# Policy 7: Allow DNS resolution (required for all pods)
+# WHY: Without DNS egress, pods cannot resolve service names.
+# Restricted to kube-dns namespace only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: threat-detection
+  annotations:
+    security.policy/purpose: "Allow DNS resolution for all pods — required for service discovery"
+spec:
+  podSelector: {}  # All pods need DNS
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# Policy 8: Allow app egress to in-cluster services only
+# WHY: Flask app must NOT be able to make arbitrary outbound connections.
+# This blocks C2 beaconing, data exfiltration, and SSRF pivoting.
+# Falco still monitors egress attempts at the syscall level.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-app-egress
+  namespace: threat-detection
+  annotations:
+    security.policy/purpose: "Restrict app to cluster-internal egress only — block C2/exfil"
+spec:
+  podSelector:
+    matchLabels:
+      app: threat-detection-app
+  policyTypes:
+    - Egress
+  egress:
+    # Allow intra-namespace communication only
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: threat-detection
+    # DNS (already covered by allow-dns-egress but explicit here)
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53

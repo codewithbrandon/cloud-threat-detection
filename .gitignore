@@ -1,0 +1,50 @@
+# Secrets — never commit these
+.env
+.env.*
+*.env
+secrets/
+credentials/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+kubeconfig
+*.kubeconfig
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+env/
+.venv/
+pip-wheel-metadata/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+attack-results-*.json
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Helm
+charts/
+*.tgz
