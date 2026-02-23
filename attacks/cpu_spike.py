@@ -65,12 +65,9 @@ def trigger_cpu_spike(
             start = time.time()
             response = requests.post(
                 f"{target}/load",
-                json={
-                    "duration": duration,
-                    "intensity": intensity
-                },
+                json={"duration": duration, "intensity": intensity},
                 timeout=30,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
             )
             elapsed = time.time() - start
 
@@ -80,7 +77,7 @@ def trigger_cpu_spike(
                 "duration_requested": duration,
                 "status_code": response.status_code,
                 "response_ms": round(elapsed * 1000, 1),
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
             if response.status_code == 200:
@@ -89,9 +86,7 @@ def trigger_cpu_spike(
                     f"Prometheus alert should fire in ~{120 if intensity < 0.9 else 60}s"
                 )
             else:
-                logger.error(
-                    f"[SPIKE {i+1}/{repeat}] Unexpected status: {response.status_code}"
-                )
+                logger.error(f"[SPIKE {i+1}/{repeat}] Unexpected status: {response.status_code}")
 
             results.append(result)
 
@@ -102,11 +97,13 @@ def trigger_cpu_spike(
 
         except requests.exceptions.RequestException as e:
             logger.error(f"[SPIKE {i+1}] Request failed: {e}")
-            results.append({
-                "spike": i + 1,
-                "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
+            results.append(
+                {
+                    "spike": i + 1,
+                    "error": str(e),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
 
     return results
 
@@ -123,10 +120,7 @@ def monitor_alert_firing(target: str, prometheus_url: str, duration: int) -> Non
 
     while time.time() < end_time:
         try:
-            response = requests.get(
-                f"{prometheus_url}/api/v1/alerts",
-                timeout=10
-            )
+            response = requests.get(f"{prometheus_url}/api/v1/alerts", timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 firing = [
@@ -153,43 +147,31 @@ def main():
     parser = argparse.ArgumentParser(
         description="CPU Spike Attack Simulation — Threat Detection Platform"
     )
-    parser.add_argument(
-        "--target",
-        default="http://localhost:8080",
-        help="Target application URL"
-    )
+    parser.add_argument("--target", default="http://localhost:8080", help="Target application URL")
     parser.add_argument(
         "--intensity",
         type=float,
         default=0.9,
-        help="Spike intensity 0.0-1.0 (0.9 = 99% CPU, 0.7 = ~85% CPU)"
+        help="Spike intensity 0.0-1.0 (0.9 = 99% CPU, 0.7 = ~85% CPU)",
     )
     parser.add_argument(
         "--duration",
         type=int,
         default=120,
-        help="Duration in seconds for CPU spike"
+        help="Duration in seconds for CPU spike",
     )
-    parser.add_argument(
-        "--repeat",
-        type=int,
-        default=1,
-        help="Number of spike events"
-    )
+    parser.add_argument("--repeat", type=int, default=1, help="Number of spike events")
     parser.add_argument(
         "--prometheus",
         default="http://localhost:9090",
-        help="Prometheus URL for alert monitoring"
+        help="Prometheus URL for alert monitoring",
     )
     parser.add_argument(
         "--monitor-alerts",
         action="store_true",
-        help="Poll Prometheus to verify alert fires"
+        help="Poll Prometheus to verify alert fires",
     )
-    parser.add_argument(
-        "--output",
-        help="Write results JSON to file"
-    )
+    parser.add_argument("--output", help="Write results JSON to file")
     args = parser.parse_args()
 
     simulated_cpu = 70 + (args.intensity * 29)
@@ -214,12 +196,7 @@ def main():
     input("\nPress ENTER to start attack simulation (Ctrl+C to cancel)...")
 
     start = datetime.now(timezone.utc)
-    results = trigger_cpu_spike(
-        args.target,
-        args.intensity,
-        args.duration,
-        args.repeat
-    )
+    results = trigger_cpu_spike(args.target, args.intensity, args.duration, args.repeat)
 
     if args.monitor_alerts:
         monitor_alert_firing(args.target, args.prometheus, args.duration + 180)

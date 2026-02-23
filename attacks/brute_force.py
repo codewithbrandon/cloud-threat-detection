@@ -49,21 +49,49 @@ logger = logging.getLogger("brute-force-simulator")
 # WHY: Real brute force attacks use realistic credential dictionaries.
 # These are generic enough to be safe in a demo context.
 USERNAMES = [
-    "admin", "administrator", "root", "user", "test",
-    "monitor", "operator", "deploy", "service", "guest",
-    "jenkins", "gitlab", "postgres", "mysql", "redis"
+    "admin",
+    "administrator",
+    "root",
+    "user",
+    "test",
+    "monitor",
+    "operator",
+    "deploy",
+    "service",
+    "guest",
+    "jenkins",
+    "gitlab",
+    "postgres",
+    "mysql",
+    "redis",
 ]
 
 PASSWORDS = [
-    "password", "123456", "password123", "admin123", "letmein",
-    "welcome", "qwerty", "abc123", "Password1", "Pass@word",
-    "changeme", "default", "admin", "login", "test123",
-    "welcome1", "monkey", "dragon", "master", "sunshine"
+    "password",
+    "123456",
+    "password123",
+    "admin123",
+    "letmein",
+    "welcome",
+    "qwerty",
+    "abc123",
+    "Password1",
+    "Pass@word",
+    "changeme",
+    "default",
+    "admin",
+    "login",
+    "test123",
+    "welcome1",
+    "monkey",
+    "dragon",
+    "master",
+    "sunshine",
 ]
 
 # Source IPs to simulate distributed attack
 SIMULATED_SOURCE_IPS = [
-    "203.0.113.10",   # TEST-NET-3 (RFC 5737 — safe for documentation)
+    "203.0.113.10",  # TEST-NET-3 (RFC 5737 — safe for documentation)
     "203.0.113.20",
     "203.0.113.30",
     "198.51.100.10",  # TEST-NET-2
@@ -75,6 +103,7 @@ SIMULATED_SOURCE_IPS = [
 @dataclass
 class AttackResult:
     """Tracks results for post-attack analysis."""
+
     total_requests: int = 0
     successful_logins: int = 0
     failed_logins: int = 0
@@ -136,8 +165,8 @@ def attempt_login(
             timeout=10,
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (compatible; BruteForceSimulator/1.0)"
-            }
+                "User-Agent": "Mozilla/5.0 (compatible; BruteForceSimulator/1.0)",
+            },
         )
         elapsed_ms = round((time.time() - start) * 1000, 1)
 
@@ -147,7 +176,7 @@ def attempt_login(
             "source_ip": source_ip,
             "status_code": response.status_code,
             "response_ms": elapsed_ms,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         if result_tracker:
@@ -241,9 +270,10 @@ def run_distributed_attack(
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(
-                attempt_login, target, username, password, source_ip, result_tracker
-            ): (username, source_ip)
+            executor.submit(attempt_login, target, username, password, source_ip, result_tracker): (
+                username,
+                source_ip,
+            )
             for username, password, source_ip in combinations
         }
 
@@ -287,7 +317,7 @@ def main():
     parser.add_argument(
         "--target",
         default="http://localhost:8080",
-        help="Base URL of the target application"
+        help="Base URL of the target application",
     )
     parser.add_argument(
         "--mode",
@@ -297,39 +327,36 @@ def main():
             "sequential: single IP rapid attempts (tests per-IP threshold)\n"
             "distributed: multiple IPs (tests global threshold)\n"
             "targeted: exhaustive spray against one account"
-        )
+        ),
     )
     parser.add_argument(
         "--username",
         default="admin",
-        help="Target username (for sequential/targeted modes)"
+        help="Target username (for sequential/targeted modes)",
     )
     parser.add_argument(
         "--count",
         type=int,
         default=20,
-        help="Number of login attempts (sequential mode)"
+        help="Number of login attempts (sequential mode)",
     )
     parser.add_argument(
         "--rate",
         type=float,
         default=5.0,
-        help="Attempts per second (sequential mode)"
+        help="Attempts per second (sequential mode)",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
         default=4,
-        help="Concurrent threads (distributed mode)"
+        help="Concurrent threads (distributed mode)",
     )
-    parser.add_argument(
-        "--output",
-        help="Write results JSON to file"
-    )
+    parser.add_argument("--output", help="Write results JSON to file")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show configuration without executing attack"
+        help="Show configuration without executing attack",
     )
     args = parser.parse_args()
 

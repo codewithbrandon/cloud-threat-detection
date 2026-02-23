@@ -37,15 +37,11 @@ logger = logging.getLogger("memory-exhaustion-simulator")
 def trigger_memory_allocation(target: str, size_mb: int) -> dict:
     """Trigger memory allocation via /memory endpoint."""
     try:
-        response = requests.post(
-            f"{target}/memory",
-            json={"size_mb": size_mb},
-            timeout=15
-        )
+        response = requests.post(f"{target}/memory", json={"size_mb": size_mb}, timeout=15)
         result = {
             "size_mb": size_mb,
             "status_code": response.status_code,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if response.status_code == 200:
             data = response.json()

@@ -53,23 +53,20 @@ def simulate_shell_execution(target: str, commands: list) -> list:
     for cmd in commands:
         logger.info(f"  Executing: '{cmd}'")
         try:
-            response = requests.post(
-                f"{target}/exec",
-                json={"command": cmd},
-                timeout=15
-            )
+            response = requests.post(f"{target}/exec", json={"command": cmd}, timeout=15)
             result = {
                 "scenario": "shell_execution",
                 "command": cmd,
                 "status_code": response.status_code,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             if response.status_code == 200:
                 data = response.json()
                 result["output"] = data.get("output", "")
                 result["detection_rule"] = data.get("detection_rule", "")
                 logger.info(
-                    f"  Result: {data.get('output', '')[:80]} | " f"Rule: {data.get('detection_rule')}"
+                    f"  Result: {data.get('output', '')[:80]} | "
+                    f"Rule: {data.get('detection_rule')}"
                 )
             results.append(result)
             time.sleep(1)  # 1s between commands to generate distinct Falco events
@@ -95,16 +92,12 @@ def simulate_network_probe(target: str, targets: list) -> list:
     for probe_target in targets:
         logger.info(f"  Probing: {probe_target}")
         try:
-            response = requests.post(
-                f"{target}/probe",
-                json={"target": probe_target},
-                timeout=10
-            )
+            response = requests.post(f"{target}/probe", json={"target": probe_target}, timeout=10)
             result = {
                 "scenario": "network_probe",
                 "target": probe_target,
                 "status_code": response.status_code,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             if response.status_code == 200:
                 data = response.json()
@@ -138,16 +131,12 @@ def simulate_file_tampering(target: str, count: int = 3) -> list:
     for i in range(count):
         logger.info(f"  Write attempt {i+1}/{count}")
         try:
-            response = requests.post(
-                f"{target}/file-write",
-                json={},
-                timeout=10
-            )
+            response = requests.post(f"{target}/file-write", json={}, timeout=10)
             result = {
                 "scenario": "file_tampering",
                 "attempt": i + 1,
                 "status_code": response.status_code,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             if response.status_code == 200:
                 data = response.json()
@@ -161,7 +150,7 @@ def simulate_file_tampering(target: str, count: int = 3) -> list:
             time.sleep(2)
         except Exception as e:
             logger.error(f"  Error: {e}")
-            results.append({"attempt": i+1, "error": str(e)})
+            results.append({"attempt": i + 1, "error": str(e)})
 
     return results
 
@@ -196,11 +185,12 @@ def run_full_kill_chain(target: str) -> dict:
     # Phase 2: Discovery
     logger.info("\n[PHASE 2] Discovery — Network Enumeration")
     results["discovery"] = simulate_network_probe(
-        target, [
-            "192.168.1.1",    # Internal network gateway
-            "10.0.0.1",       # Private range
+        target,
+        [
+            "192.168.1.1",  # Internal network gateway
+            "10.0.0.1",  # Private range
             "203.0.113.100",  # External C2 simulation
-        ]
+        ],
     )
     time.sleep(2)
 
@@ -212,19 +202,18 @@ def run_full_kill_chain(target: str) -> dict:
     # Phase 4: C2 Beaconing
     logger.info("\n[PHASE 4] C2 Beaconing — Outbound Connection Attempts")
     results["c2_beaconing"] = simulate_network_probe(
-        target, [
+        target,
+        [
             "203.0.113.200",  # Simulated C2 server
-            "198.51.100.100", # Simulated C2 fallback
-        ]
+            "198.51.100.100",  # Simulated C2 fallback
+        ],
     )
 
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Suspicious Container Activity Simulation"
-    )
+    parser = argparse.ArgumentParser(description="Suspicious Container Activity Simulation")
     parser.add_argument("--target", default="http://localhost:8080")
     parser.add_argument(
         "--scenario",
@@ -235,7 +224,7 @@ def main():
             "network: network probe simulation (Falco: unexpected_outbound_connection)\n"
             "file: file write simulation (Falco: write_sensitive_file)\n"
             "kill-chain: full attacker kill chain sequence"
-        )
+        ),
     )
     parser.add_argument("--output", help="Write results to JSON file")
     args = parser.parse_args()

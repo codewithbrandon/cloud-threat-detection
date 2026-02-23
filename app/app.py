@@ -163,12 +163,17 @@ def after_request(response):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": os.environ.get("APP_VERSION", "1.0.0"),
-        "service": "threat-detection-app",
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "healthy",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": os.environ.get("APP_VERSION", "1.0.0"),
+                "service": "threat-detection-app",
+            }
+        ),
+        200,
+    )
 
 
 @app.route("/ready", methods=["GET"])
@@ -225,11 +230,16 @@ def login():
         logger.info(f"AUTHENTICATION_SUCCESS user={username} source_ip={source_ip}")
         with _tracker_lock:
             _login_failure_tracker[source_ip] = 0  # reset on success
-        return jsonify({
-            "status": "authenticated",
-            "username": username,
-            "token": f"sim-token-{int(time.time())}",
-        }), 200
+        return (
+            jsonify(
+                {
+                    "status": "authenticated",
+                    "username": username,
+                    "token": f"sim-token-{int(time.time())}",
+                }
+            ),
+            200,
+        )
     else:
         # Increment Prometheus counter — feeds Alertmanager rule
         failed_logins_total.labels(source_ip=source_ip, username=username).inc()
@@ -300,12 +310,17 @@ def load():
     spike_thread = threading.Thread(target=cpu_spike_worker, daemon=True)
     spike_thread.start()
 
-    return jsonify({
-        "status": "cpu_spike_triggered",
-        "duration_seconds": duration_seconds,
-        "intensity": intensity,
-        "warning": "This action is logged and alerted",
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "cpu_spike_triggered",
+                "duration_seconds": duration_seconds,
+                "intensity": intensity,
+                "warning": "This action is logged and alerted",
+            }
+        ),
+        200,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -352,12 +367,17 @@ def memory_pressure():
         f"total_allocated_bytes={total_allocated}"
     )
 
-    return jsonify({
-        "status": "memory_pressure_triggered",
-        "allocated_mb": size_mb,
-        "total_allocated_bytes": total_allocated,
-        "warning": "Pod may be OOM-killed by Kubernetes",
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "memory_pressure_triggered",
+                "allocated_mb": size_mb,
+                "total_allocated_bytes": total_allocated,
+                "warning": "Pod may be OOM-killed by Kubernetes",
+            }
+        ),
+        200,
+    )
 
 
 @app.route("/memory/release", methods=["POST"])
@@ -428,14 +448,19 @@ def suspicious_exec():
         output = f"execution_error: {str(e)}"
         logger.error(f"EXEC_ERROR command={requested} error={str(e)}")
 
-    return jsonify({
-        "status": "command_executed",
-        "command": requested,
-        "output": output,
-        "warning": "This event triggered Falco runtime alert",
-        "severity": "HIGH",
-        "detection_rule": "shell_spawned_in_container",
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "command_executed",
+                "command": requested,
+                "output": output,
+                "warning": "This event triggered Falco runtime alert",
+                "severity": "HIGH",
+                "detection_rule": "shell_spawned_in_container",
+            }
+        ),
+        200,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -468,13 +493,18 @@ def network_probe():
 
     suspicious_activity_total.labels(activity_type="network_probe").inc()
 
-    return jsonify({
-        "status": "probe_logged",
-        "target": target,
-        "blocked_by": "NetworkPolicy",
-        "detected_by": ["Falco", "Loki", "Prometheus"],
-        "severity": "CRITICAL",
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "probe_logged",
+                "target": target,
+                "blocked_by": "NetworkPolicy",
+                "detected_by": ["Falco", "Loki", "Prometheus"],
+                "severity": "CRITICAL",
+            }
+        ),
+        200,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -516,14 +546,19 @@ def suspicious_file_write():
     except Exception as e:
         write_status = f"error: {str(e)}"
 
-    return jsonify({
-        "status": "file_write_simulated",
-        "actual_path": safe_path,
-        "simulated_target": "/etc/passwd",
-        "write_status": write_status,
-        "severity": "HIGH",
-        "detection_rule": "write_sensitive_file",
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "file_write_simulated",
+                "actual_path": safe_path,
+                "simulated_target": "/etc/passwd",
+                "write_status": write_status,
+                "severity": "HIGH",
+                "detection_rule": "write_sensitive_file",
+            }
+        ),
+        200,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -545,28 +580,33 @@ def metrics():
 
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({
-        "service": "Cloud-Native Threat Detection Platform",
-        "version": os.environ.get("APP_VERSION", "1.0.0"),
-        "endpoints": {
-            "GET  /health": "Kubernetes liveness probe",
-            "GET  /ready": "Kubernetes readiness probe",
-            "GET  /metrics": "Prometheus metrics scrape endpoint",
-            "POST /login": "Authentication endpoint (brute force target)",
-            "POST /load": "CPU spike simulation",
-            "POST /memory": "Memory pressure simulation",
-            "POST /memory/release": "Release allocated memory",
-            "POST /exec": "Suspicious command execution (Falco target)",
-            "POST /probe": "Network probe simulation",
-            "POST /file-write": "Suspicious file write simulation",
-        },
-        "detection_layers": [
-            "Prometheus metrics + Alertmanager",
-            "Falco runtime syscall monitoring",
-            "Loki log aggregation + alerts",
-            "Kubernetes NetworkPolicy enforcement",
-        ],
-    }), 200
+    return (
+        jsonify(
+            {
+                "service": "Cloud-Native Threat Detection Platform",
+                "version": os.environ.get("APP_VERSION", "1.0.0"),
+                "endpoints": {
+                    "GET  /health": "Kubernetes liveness probe",
+                    "GET  /ready": "Kubernetes readiness probe",
+                    "GET  /metrics": "Prometheus metrics scrape endpoint",
+                    "POST /login": "Authentication endpoint (brute force target)",
+                    "POST /load": "CPU spike simulation",
+                    "POST /memory": "Memory pressure simulation",
+                    "POST /memory/release": "Release allocated memory",
+                    "POST /exec": "Suspicious command execution (Falco target)",
+                    "POST /probe": "Network probe simulation",
+                    "POST /file-write": "Suspicious file write simulation",
+                },
+                "detection_layers": [
+                    "Prometheus metrics + Alertmanager",
+                    "Falco runtime syscall monitoring",
+                    "Loki log aggregation + alerts",
+                    "Kubernetes NetworkPolicy enforcement",
+                ],
+            }
+        ),
+        200,
+    )
 
 
 if __name__ == "__main__":
