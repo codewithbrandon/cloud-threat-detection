@@ -1,0 +1,55 @@
+root = true
+
+# ============================================================================
+# EditorConfig — https://editorconfig.org
+# Enforces consistent whitespace and encoding across all editors and OSes.
+# Mirrors the rules checked by yamllint, black, and ruff in CI.
+# ============================================================================
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Python — black uses 4-space indentation, 100 char line length.
+[*.py]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# YAML — 2-space indentation per Kubernetes convention.
+[*.{yaml,yml}]
+indent_style = space
+indent_size = 2
+max_line_length = 150
+
+# Makefile — MUST use hard tabs (make requirement).
+[Makefile]
+indent_style = tab
+
+# JSON — 2-space indentation.
+[*.json]
+indent_style = space
+indent_size = 2
+
+# Markdown — trim trailing whitespace except in multiline code blocks;
+# preserve trailing spaces used for line breaks in some renderers.
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# Shell scripts.
+[*.sh]
+indent_style = space
+indent_size = 2
+
+# Dockerfile.
+[Dockerfile]
+indent_style = space
+indent_size = 4
+
+# TOML (pyproject.toml).
+[*.toml]
+indent_style = space
+indent_size = 4

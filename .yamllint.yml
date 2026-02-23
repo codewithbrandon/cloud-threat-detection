@@ -1,0 +1,48 @@
+---
+# yamllint configuration
+# Used by: CI yamllint job + local `make lint-yaml`
+# Docs: https://yamllint.readthedocs.io/en/stable/configuration.html
+
+extends: default
+
+rules:
+  # Line length — allow longer lines for Prometheus expressions and comments.
+  line-length:
+    max: 150
+    level: warning
+
+  # Comments — require a space after '#' but allow shebangs.
+  comments:
+    min-spaces-from-content: 1
+
+  # Trailing spaces — error (caught by editorconfig too).
+  trailing-spaces: enable
+
+  # Truthy — require explicit true/false, not yes/no.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+
+  # Braces — allow flow mappings (Prometheus label selectors use them).
+  braces:
+    max-spaces-inside: 1
+
+  # Brackets — allow compact lists.
+  brackets:
+    max-spaces-inside: 1
+
+  # Indentation — 2 spaces, consistent with Kubernetes convention.
+  indentation:
+    spaces: 2
+    indent-sequences: true
+    check-multi-line-strings: false
+
+  # Empty lines — allow up to 2 consecutive blank lines for readability.
+  empty-lines:
+    max: 2
+    max-start: 0
+    max-end: 0
+
+  # Document start — optional (many K8s files omit '---').
+  document-start:
+    present: optional

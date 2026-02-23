@@ -4,6 +4,7 @@
 
 <br/>
 
+[![CI](https://github.com/codewithbrandon/cloud-threat-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/codewithbrandon/cloud-threat-detection/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.29+-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io)
 [![Prometheus](https://img.shields.io/badge/Prometheus-2.51-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)](https://prometheus.io)
@@ -102,7 +103,7 @@ and mine crypto for weeks before anyone notices.
   ║  NOTIFICATION LAYER                                                         ║
   ║  ┌─────────────────┐   ┌──────────────────┐   ┌───────────────────────┐   ║
   ║  │  Slack Webhook  │   │  PagerDuty       │   │  Email (SMTP)         │   ║
-  ║  │  #sec-incidents │   │  Critical pages  │   │  security@company.com │   ║
+  ║  │  #sec-incidents │   │  Critical pages  │   │  Email (configurable) │   ║
   ║  │  #platform-ops  │   │  30min re-alert  │   │  HTML template        │   ║
   ║  └─────────────────┘   └──────────────────┘   └───────────────────────┘   ║
   ╚═════════════════════════════════════════════════════════════════════════════╝
@@ -545,6 +546,42 @@ Loki is label-indexed, not full-text indexed. For security use cases, I know exa
 Defense in depth. An attacker who compromises the application and stops writing logs still generates syscalls that Falco catches. An attack that stays below per-IP metric thresholds still shows up in global Loki log counts. A Falco rule gap doesn't mean the attack is invisible — Prometheus captures the metric signal. Each layer has different blind spots; combining them means an attacker has to evade all three simultaneously, which is exponentially harder.
 
 </details>
+
+---
+
+## Quality Gates
+
+Every push and pull request runs the full CI pipeline:
+
+| Check | Tool | What It Catches |
+|-------|------|-----------------|
+| YAML lint | `yamllint` | Indentation, trailing spaces, type errors in all manifests |
+| K8s schema validation | `kubeconform` | Invalid Kubernetes API fields against the 1.29 schema |
+| Python lint | `ruff` | Import order, unused vars, style, pyupgrade suggestions |
+| Python format | `black` | Consistent code formatting — fails on drift |
+| Secret scanning | `gitleaks` | Accidentally committed keys, tokens, passwords |
+| Container CVE scan | `trivy` (image) | OS + library CVEs in the built Docker image (fails on CRITICAL) |
+| Filesystem scan | `trivy` (fs) | IaC misconfigurations and secrets in source (informational) |
+
+Results from Trivy appear in the [GitHub Security tab](https://github.com/codewithbrandon/cloud-threat-detection/security).
+
+### Run checks locally
+
+```bash
+# Install tools once
+pip install ruff==0.4.10 black==24.4.2 yamllint==1.35.1
+
+# Install kubeconform (Linux/macOS)
+curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+  | tar -xz -C /usr/local/bin kubeconform
+
+# Run all checks
+make lint           # yaml + python
+
+make validate-k8s   # kubeconform schema validation
+
+make lint-fix       # auto-fix python formatting (writes files)
+```
 
 ---
 

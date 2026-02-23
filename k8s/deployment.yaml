@@ -16,8 +16,6 @@ metadata:
   annotations:
     # Deployment annotations for change tracking and audit
     deployment.kubernetes.io/revision: "1"
-    security.policy/last-reviewed: "2024-01-01"
-    security.policy/reviewed-by: "platform-security-team"
 spec:
   replicas: 2
 

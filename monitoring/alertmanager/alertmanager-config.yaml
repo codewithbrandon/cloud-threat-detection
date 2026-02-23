@@ -25,11 +25,13 @@ data:
       # How long to wait before re-sending a resolved alert
       resolve_timeout: 5m
 
-      # SMTP configuration (mock — update with real values)
-      smtp_smarthost: 'smtp.company.internal:587'
-      smtp_from: 'alerts@company.com'
-      smtp_auth_username: 'alerts@company.com'
-      smtp_auth_password: '{{ env "SMTP_PASSWORD" }}'
+      # SMTP configuration — replace with your actual mail relay before deploying.
+      # Set SMTP_SMARTHOST, SMTP_FROM, SMTP_USERNAME, SMTP_PASSWORD as env vars
+      # or mount them from a Kubernetes Secret.
+      smtp_smarthost: '${SMTP_SMARTHOST:-localhost:25}'
+      smtp_from: '${SMTP_FROM:-alertmanager@localhost}'
+      smtp_auth_username: '${SMTP_USERNAME:-}'
+      smtp_auth_password: '${SMTP_PASSWORD:-}'
       smtp_require_tls: true
 
       # Slack webhook (simulated — replace with real Incoming Webhook URL)
@@ -167,7 +169,7 @@ data:
 
         # Email notification for critical security events
         email_configs:
-          - to: 'security-team@company.com'
+          - to: '${SECURITY_EMAIL:-security@localhost}'
             subject: '[CRITICAL SECURITY] {{ .CommonLabels.alertname }} — {{ .CommonLabels.cluster }}'
             body: |
               CRITICAL SECURITY ALERT

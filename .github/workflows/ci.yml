@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Prevent concurrent runs on the same ref — cancel the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # JOB 1 — YAML Lint
+  # Validates formatting across all YAML files (k8s manifests, monitoring configs,
+  # docker-compose). Catches indentation errors, trailing spaces, line length.
+  # ============================================================================
+  yamllint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint==1.35.1
+
+      - name: Run yamllint
+        run: |
+          yamllint \
+            --config-file .yamllint.yml \
+            k8s/ \
+            monitoring/ \
+            docker-compose.yaml
+
+  # ============================================================================
+  # JOB 2 — Kubernetes Manifest Validation (kubeconform)
+  # Validates all k8s manifests against the upstream Kubernetes JSON schema.
+  # Catches structural errors, unknown fields, and type mismatches before
+  # manifests ever reach a cluster.
+  # ============================================================================
+  kubeconform:
+    name: Kubeconform (K8s schema validation)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubeconform --version
+
+      - name: Validate k8s manifests
+        run: |
+          kubeconform \
+            --strict \
+            --ignore-missing-schemas \
+            --kubernetes-version 1.29.0 \
+            --schema-location default \
+            --schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            --summary \
+            k8s/*.yaml
+
+      - name: Validate monitoring manifests
+        run: |
+          kubeconform \
+            --strict \
+            --ignore-missing-schemas \
+            --kubernetes-version 1.29.0 \
+            --schema-location default \
+            --schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            --summary \
+            monitoring/prometheus/prometheus-deployment.yaml \
+            monitoring/alertmanager/alertmanager-deployment.yaml \
+            monitoring/loki/loki-deployment.yaml \
+            monitoring/falco/falco-deployment.yaml \
+            monitoring/grafana/grafana-deployment.yaml
+
+  # ============================================================================
+  # JOB 3 — Python Linting & Formatting (ruff + black)
+  # ruff: fast linter (replaces flake8 + isort + pyupgrade)
+  # black: opinionated formatter — check-only mode (no writes in CI)
+  # ============================================================================
+  python-lint:
+    name: Python (ruff + black)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install ruff==0.4.10 black==24.4.2
+
+      - name: ruff — lint
+        run: ruff check app/ attacks/
+
+      - name: black — format check
+        run: black --check --diff app/ attacks/
+
+  # ============================================================================
+  # JOB 4 — Secret Scanning (Gitleaks)
+  # Scans the full commit history for accidentally committed secrets:
+  # API keys, passwords, tokens, private keys.
+  # Runs on every push/PR to catch secrets before they propagate.
+  # ============================================================================
+  gitleaks:
+    name: Secret Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for secret scanning)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================================
+  # JOB 5 — Container Image Vulnerability Scan (Trivy)
+  # Scans the built Docker image for OS and library CVEs.
+  # Fails on CRITICAL severity — warns on HIGH.
+  # Results uploaded to GitHub Security tab as SARIF.
+  # ============================================================================
+  trivy:
+    name: Container Scan (Trivy)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # Required to upload SARIF to Security tab
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image for scanning
+        run: |
+          docker build \
+            -f docker/Dockerfile \
+            -t threat-detection-app:ci \
+            app/
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: threat-detection-app:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"          # Fail CI on CRITICAL findings
+          ignore-unfixed: true    # Skip CVEs with no available fix
+
+      - name: Upload Trivy results to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container
+
+  # ============================================================================
+  # JOB 6 — Filesystem Security Scan (Trivy fs)
+  # Scans repo source for misconfigurations, secrets in code, and IaC issues
+  # without needing to build the image first. Complements the image scan.
+  # ============================================================================
+  trivy-fs:
+    name: Filesystem Scan (Trivy fs)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"   # Warn only for fs scan (IaC misconfig findings are informational)
+          scanners: secret,misconfig
+
+      - name: Upload Trivy fs results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: trivy-fs

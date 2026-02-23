@@ -53,8 +53,8 @@ data:
                 source IP {{ $labels.source_ip }}.
                 Normal threshold: <3 failures/2min.
                 Action: Block source IP, review authentication logs in Loki.
-              runbook_url: "https://wiki.internal/playbooks/brute-force"
-              dashboard_url: "http://grafana:3000/d/auth-security"
+              runbook_url: "https://github.com/codewithbrandon/cloud-threat-detection/blob/main/docs/incident-playbook-brute-force.md"
+              dashboard_url: "https://github.com/codewithbrandon/cloud-threat-detection/blob/main/monitoring/grafana/grafana-deployment.yaml"
 
           # -----------------------------------------------------------------------
           # ALERT: BruteForceAttackCritical

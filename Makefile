@@ -16,8 +16,10 @@ DOCKER          := docker
 .DEFAULT_GOAL := help
 
 .PHONY: help build push deploy deploy-monitoring deploy-falco \
-        attack-brute attack-cpu attack-memory attack-exec attack-all \
-        port-forward logs status clean verify
+        attack-brute attack-brute-distributed attack-cpu attack-memory \
+        attack-exec attack-all \
+        port-forward logs logs-falco status clean clean-attacks verify \
+        lint lint-yaml lint-python validate-k8s
 
 help: ## Show this help message
 	@echo "Cloud-Native Threat Detection Platform"
@@ -170,3 +172,46 @@ clean: ## Delete all platform resources
 
 clean-attacks: ## Remove attack simulation result files
 	rm -f attack-results-*.json forensics-*.txt forensics-*.yaml
+
+# =============================================================================
+# QUALITY / CI GATES
+# Mirror the checks run in .github/workflows/ci.yml.
+# Install deps: pip install ruff black yamllint
+# Install kubeconform: https://github.com/yannh/kubeconform/releases
+# =============================================================================
+
+lint: lint-yaml lint-python ## Run all linters (yaml + python)
+
+lint-yaml: ## Lint all YAML files with yamllint
+	@echo "=== yamllint ==="
+	yamllint --config-file .yamllint.yml k8s/ monitoring/ docker-compose.yaml
+
+lint-python: ## Check Python formatting (ruff + black)
+	@echo "=== ruff ==="
+	ruff check app/ attacks/
+	@echo "=== black ==="
+	black --check --diff app/ attacks/
+
+validate-k8s: ## Validate Kubernetes manifests with kubeconform
+	@echo "=== kubeconform: k8s/ ==="
+	kubeconform \
+		--strict \
+		--ignore-missing-schemas \
+		--kubernetes-version 1.29.0 \
+		--summary \
+		k8s/*.yaml
+	@echo "=== kubeconform: monitoring/ ==="
+	kubeconform \
+		--strict \
+		--ignore-missing-schemas \
+		--kubernetes-version 1.29.0 \
+		--summary \
+		monitoring/prometheus/prometheus-deployment.yaml \
+		monitoring/alertmanager/alertmanager-deployment.yaml \
+		monitoring/loki/loki-deployment.yaml \
+		monitoring/falco/falco-deployment.yaml \
+		monitoring/grafana/grafana-deployment.yaml
+
+lint-fix: ## Auto-fix Python formatting (ruff + black — writes files)
+	ruff check --fix app/ attacks/
+	black app/ attacks/

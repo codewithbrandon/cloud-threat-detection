@@ -1,0 +1,52 @@
+[project]
+name = "cloud-threat-detection"
+version = "1.0.0"
+description = "Cloud-Native Threat Detection & Infrastructure Monitoring Platform"
+requires-python = ">=3.10"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# E — pycodestyle errors
+# F — pyflakes
+# I — isort
+# UP — pyupgrade
+# B — flake8-bugbear
+# SIM — flake8-simplify
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+ignore = [
+  # Line too long — black handles line length; ruff shouldn't duplicate.
+  "E501",
+  # Do not require explicit exception chaining in simulation scripts.
+  "B904",
+  # Allow print() in attack simulation scripts (intentional output).
+  "T201",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Attack simulation scripts — allow broad exception catches and loose typing.
+"attacks/*.py" = ["BLE001", "S101"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py312"]
+# Exclude generated or vendored files.
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | __pycache__
+  | \.eggs
+  | dist
+  | build
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
